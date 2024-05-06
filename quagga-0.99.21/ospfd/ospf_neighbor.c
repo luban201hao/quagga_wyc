@@ -84,7 +84,7 @@ ospf_nbr_new (struct ospf_interface *oi)
   nbr->v_ls_upd = OSPF_IF_PARAM (oi, retransmit_interval);
   nbr->priority = -1;
 
-  nbr->v_test=10;
+  nbr->v_test = T_TEST;
   /* DD flags. */
   nbr->dd_flags = OSPF_DD_FLAG_MS|OSPF_DD_FLAG_M|OSPF_DD_FLAG_I;
 
@@ -123,6 +123,7 @@ ospf_nbr_free (struct ospf_neighbor *nbr)
   ospf_lsdb_cleanup (&nbr->db_sum);
   ospf_lsdb_cleanup (&nbr->ls_req);
   ospf_lsdb_cleanup (&nbr->ls_rxmt);
+  ospf_lsdb_cleanup (&nbr->newLSAsList);
 
   /* Clear last send packet. */
   if (nbr->last_send)
@@ -437,8 +438,8 @@ ospf_nbr_get (struct ospf_interface *oi, struct ospf_header *ospfh,
   struct prefix key;
   struct ospf_neighbor *nbr;
 
-  zlog_debug("in func ospf_nbr_get, ospfh->router-id=%x",ospfh->router_id.s_addr);
-
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_nbr_get, ospfh->router-id=%x",ospfh->router_id.s_addr);
 
   key.family = AF_INET;
   key.prefixlen = IPV4_MAX_BITLEN;

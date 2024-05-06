@@ -167,7 +167,7 @@ ospf_lsa.lo: ospf_lsa.c /usr/include/stdc-predef.h ../lib/zebra.h \
  ../ospfd/ospf_opaque.h ../lib/vty.h ../lib/thread.h ../lib/log.h \
  ../ospfd/ospf_lsdb.h ../ospfd/ospf_neighbor.h ../ospfd/ospf_nsm.h \
  ../ospfd/ospf_flood.h ../ospfd/ospf_dump.h ../ospfd/ospf_route.h \
- ../ospfd/ospf_ase.h ../ospfd/ospf_zebra.h
+ ../ospfd/ospf_ase.h ../ospfd/ospf_zebra.h ../ospfd/ospf_vty.h
 
 /usr/include/stdc-predef.h:
 
@@ -646,3 +646,5 @@ ospf_lsa.lo: ospf_lsa.c /usr/include/stdc-predef.h ../lib/zebra.h \
 ../ospfd/ospf_ase.h:
 
 ../ospfd/ospf_zebra.h:
+
+../ospfd/ospf_vty.h:

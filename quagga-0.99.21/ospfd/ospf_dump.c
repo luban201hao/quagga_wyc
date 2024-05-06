@@ -124,6 +124,7 @@ const struct message ospf_network_type_msg[] =
   { OSPF_IFTYPE_NBMA,             "NBMA" },
   { OSPF_IFTYPE_POINTOMULTIPOINT, "Point-to-MultiPoint" },
   { OSPF_IFTYPE_VIRTUALLINK,      "Virtual-Link" },
+  { OSPF_IFTYPE_SE, "Satellite to Earth"},
 };
 const int ospf_network_type_msg_max = OSPF_IFTYPE_MAX;
 
@@ -496,7 +497,7 @@ ospf_as_external_lsa_dump (struct stream *s, u_int16_t length)
 		 IS_EXTERNAL_METRIC (al->e[i].tos) ? "E" : "-",
 		 al->e[i].tos & 0x7f, GET_METRIC (al->e[i].metric));
       zlog_debug ("    Forwarding address %s", inet_ntoa (al->e[i].fwd_addr));
-      zlog_debug ("    External Route Tag %d", al->e[i].route_tag);
+      zlog_debug ("    External Route Tag 0x%x", al->e[i].route_tag);
     }
 }
 

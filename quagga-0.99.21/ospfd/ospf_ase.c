@@ -274,7 +274,10 @@ ospf_ase_calculate_new_route (struct ospf_lsa *lsa,
 
   new->type = OSPF_DESTINATION_NETWORK;
   new->u.ext.origin = lsa;
-  new->u.ext.tag = ntohl (al->e[0].route_tag);
+  // ========================   wyc modify ================
+  // new->u.ext.tag = ntohl (al->e[0].route_tag);
+  // ======================================================
+  new->u.ext.tag = 0;
   new->u.ext.asbr = asbr_route;
 
   assert (new != asbr_route);
@@ -304,38 +307,37 @@ ospf_ase_calculate_route (struct ospf *ospf, struct ospf_lsa * lsa)
 
   /* Stay away from any Local Translated Type-7 LSAs */
   if (CHECK_FLAG (lsa->flags, OSPF_LSA_LOCAL_XLT))
-    {
-      if (IS_DEBUG_OSPF_NSSA)
-	zlog_debug ("ospf_ase_calc(): Rejecting Local Xlt'd");
-      return 0;
-    }
+  {
+    if (IS_DEBUG_OSPF_NSSA)
+      zlog_debug ("ospf_ase_calc(): Rejecting Local Xlt'd");
+    return 0;
+  }
 
   if (IS_DEBUG_OSPF (lsa, LSA))
-    zlog_debug ("Route[External]: Calculate AS-external-LSA to %s/%d",
-		inet_ntoa (al->header.id), ip_masklen (al->mask));
+    zlog_debug ("Route[External]: Calculate AS-external-LSA to %s/%d", inet_ntoa (al->header.id), ip_masklen (al->mask));
   /* (1) If the cost specified by the LSA is LSInfinity, or if the
          LSA's LS age is equal to MaxAge, then examine the next LSA. */
   if ((metric = GET_METRIC (al->e[0].metric)) >= OSPF_LS_INFINITY)
-    {
-      if (IS_DEBUG_OSPF (lsa, LSA))
-	zlog_debug ("Route[External]: Metric is OSPF_LS_INFINITY");
-      return 0;
-    }
+  {
+    if (IS_DEBUG_OSPF (lsa, LSA))
+      zlog_debug ("Route[External]: Metric is OSPF_LS_INFINITY");
+    return 0;
+  }
   if (IS_LSA_MAXAGE (lsa))
-    {
-      if (IS_DEBUG_OSPF (lsa, LSA))
-	zlog_debug ("Route[External]: AS-external-LSA is MAXAGE");
-      return 0;
-    }
+  {
+    if (IS_DEBUG_OSPF (lsa, LSA))
+      zlog_debug ("Route[External]: AS-external-LSA is MAXAGE");
+    return 0;
+  }
   
   /* (2) If the LSA was originated by the calculating router itself,
      examine the next LSA. */
   if (IS_LSA_SELF (lsa))
-    {
-      if (IS_DEBUG_OSPF (lsa, LSA))
-	zlog_debug ("Route[External]: AS-external-LSA is self originated");
-      return 0;
-    }
+  {
+    if (IS_DEBUG_OSPF (lsa, LSA))
+      zlog_debug ("Route[External]: AS-external-LSA is self originated");
+    return 0;
+  }
 
   /* (3) Call the destination described by the LSA N.  N's address is
          obtained by masking the LSA's Link State ID with the
@@ -353,17 +355,17 @@ ospf_ase_calculate_route (struct ospf *ospf, struct ospf_lsa * lsa)
   
   asbr_route = ospf_find_asbr_route (ospf, ospf->new_rtrs, &asbr);
   if (asbr_route == NULL)
-    {
-      if (IS_DEBUG_OSPF (lsa, LSA))
-	zlog_debug ("Route[External]: Can't find originating ASBR route");
-      return 0;
-    }
+  {
+    if (IS_DEBUG_OSPF (lsa, LSA))
+      zlog_debug ("Route[External]: Can't find originating ASBR route");
+    return 0;
+  }
   if (!(asbr_route->u.std.flags & ROUTER_LSA_EXTERNAL))
-    {
-      if (IS_DEBUG_OSPF (lsa, LSA))
-	zlog_debug ("Route[External]: Originating router is not an ASBR");
-      return 0;
-    }
+  {
+    if (IS_DEBUG_OSPF (lsa, LSA))
+      zlog_debug ("Route[External]: Originating router is not an ASBR");
+    return 0;
+  }
   
   /*     Else, this LSA describes an AS external path to destination
 	 N.  Examine the forwarding address specified in the AS-
@@ -371,54 +373,59 @@ ospf_ase_calculate_route (struct ospf *ospf, struct ospf_lsa * lsa)
 	 packets for the destination should be forwarded. */
   
   if (al->e[0].fwd_addr.s_addr == 0)
-    {
-      /* If the forwarding address is set to 0.0.0.0, packets should
-	 be sent to the ASBR itself. Among the multiple routing table
-	 entries for the ASBR, select the preferred entry as follows.
-	 If RFC1583Compatibility is set to "disabled", prune the set
-	 of routing table entries for the ASBR as described in
-	 Section 16.4.1. In any case, among the remaining routing
-	 table entries, select the routing table entry with the least
-	 cost; when there are multiple least cost routing table
-	 entries the entry whose associated area has the largest OSPF
-	 Area ID (when considered as an unsigned 32-bit integer) is
-	 chosen. */
+  {
+    /* If the forwarding address is set to 0.0.0.0, packets should
+  be sent to the ASBR itself. Among the multiple routing table
+  entries for the ASBR, select the preferred entry as follows.
+  If RFC1583Compatibility is set to "disabled", prune the set
+  of routing table entries for the ASBR as described in
+  Section 16.4.1. In any case, among the remaining routing
+  table entries, select the routing table entry with the least
+  cost; when there are multiple least cost routing table
+  entries the entry whose associated area has the largest OSPF
+  Area ID (when considered as an unsigned 32-bit integer) is
+  chosen. */
 
-      /* asbr_route already contains the requested route */
-    }
+    /* asbr_route already contains the requested route */
+  }
   else
+  {
+    if(al->header.id.s_addr == 0)
     {
-      /* If the forwarding address is non-zero, look up the
-	 forwarding address in the routing table.[24] The matching
-	 routing table entry must specify an intra-area or inter-area
-	 path; if no such path exists, do nothing with the LSA and
-	 consider the next in the list. */
-      if (! ospf_ase_forward_address_check (ospf, al->e[0].fwd_addr))
-	{
-	  if (IS_DEBUG_OSPF (lsa, LSA))
-	    zlog_debug ("Route[External]: Forwarding address is our router "
-			"address");
-	  return 0;
-	}
+      /// zlog_debug("in ospf_ase_calculate_route, al->header.id.s_addr == 0, but forward address != 0");
       
-      asbr.family = AF_INET;
-      asbr.prefix = al->e[0].fwd_addr;
-      asbr.prefixlen = IPV4_MAX_BITLEN;
-
-      rn = route_node_match (ospf->new_table, (struct prefix *) &asbr);
-      
-      if (rn == NULL || (asbr_route = rn->info) == NULL)
-	{
-	  if (IS_DEBUG_OSPF (lsa, LSA))
-	    zlog_debug ("Route[External]: Can't find route to forwarding "
-			"address");
-	  if (rn)
-	    route_unlock_node (rn);
-	  return 0;
-	}
-
-      route_unlock_node (rn);
     }
+    /* If the forwarding address is non-zero, look up the
+  forwarding address in the routing table.[24] The matching
+  routing table entry must specify an intra-area or inter-area
+  path; if no such path exists, do nothing with the LSA and
+  consider the next in the list. */
+    if (! ospf_ase_forward_address_check (ospf, al->e[0].fwd_addr))
+    {
+      if (IS_DEBUG_OSPF (lsa, LSA))
+        zlog_debug ("Route[External]: Forwarding address is our router "
+        "address");
+      return 0;
+    }
+    
+    asbr.family = AF_INET;
+    asbr.prefix = al->e[0].fwd_addr;
+    asbr.prefixlen = IPV4_MAX_BITLEN;
+
+    rn = route_node_match (ospf->new_table, (struct prefix *) &asbr);
+    
+    if (rn == NULL || (asbr_route = rn->info) == NULL)
+    {
+      if (IS_DEBUG_OSPF (lsa, LSA))
+        zlog_debug ("Route[External]: Can't find route to forwarding "
+        "address");
+      if (rn)
+        route_unlock_node (rn);
+      return 0;
+    }
+
+    route_unlock_node (rn);
+  }
 
   /* (4) Let X be the cost specified by the preferred routing table
          entry for the ASBR/forwarding address, and Y the cost
@@ -456,9 +463,9 @@ ospf_ase_calculate_route (struct ospf *ospf, struct ospf_lsa * lsa)
     {
       route_unlock_node(rn);
       if (rn->info == NULL)
-	zlog_info ("Route[External]: rn->info NULL");
+	      zlog_info ("Route[External]: rn->info NULL");
       if (new)
-	ospf_route_free (new);
+	      ospf_route_free (new);
       return 0;
     }
   /* Find a route to the same dest */
@@ -651,31 +658,39 @@ ospf_ase_calculate_timer (struct thread *t)
       /* Calculate external route for each AS-external-LSA */
       LSDB_LOOP (EXTERNAL_LSDB (ospf), rn, lsa)
       {
-        zlog_debug("in func ospf_ase_calculate_timer, lsa->id=%x adv=%x",lsa->data->id.s_addr,lsa->data->adv_router.s_addr);
-        if(lsa->phase_count!=0)
+        // ===================== wyc add =============================
+        if(MY_DEBUG)
+          zlog_debug("in func ospf_ase_calculate_timer, lsa->id=%x adv=%x",lsa->data->id.s_addr,lsa->data->adv_router.s_addr);
+        // struct as_external_lsa *ase = (struct as_external_lsa *)lsa->data;
+        // if(ase->e[0].tos == 1)
+        // {
+        //   if(MY_DEBUG)
+        //     zlog_debug("tos == 1, skip this ase");
+        //   continue;
+        // }
+        if(lsa->phase_count != 0 && lsa->phase_matrix[0][next_phase_tmp] == 1)
         {
-          if(lsa->phase_matrix[0][global_phase]==1)
-          {
-            zlog_debug("in phase=%d, skip this ase lsa",global_phase);
-            continue;
-          }
+          if(MY_DEBUG)
+            zlog_debug("link info == 1, skip this ase");
+          continue;          
         }
+        // ===================== end =================================
         ospf_ase_calculate_route (ospf, lsa);
       }
 	
 
       /*  This version simple adds to the table all NSSA areas  */
       if (ospf->anyNSSA)
-	for (ALL_LIST_ELEMENTS_RO (ospf->areas, node, area))
-	  {
-	    if (IS_DEBUG_OSPF_NSSA)
-	      zlog_debug ("ospf_ase_calculate_timer(): looking at area %s",
-			 inet_ntoa (area->area_id));
+	      for (ALL_LIST_ELEMENTS_RO (ospf->areas, node, area))
+        {
+          if (IS_DEBUG_OSPF_NSSA)
+            zlog_debug ("ospf_ase_calculate_timer(): looking at area %s",
+            inet_ntoa (area->area_id));
 
-	    if (area->external_routing == OSPF_AREA_NSSA)
-	      LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
-		ospf_ase_calculate_route (ospf, lsa);
-	  }
+          if (area->external_routing == OSPF_AREA_NSSA)
+            LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
+              ospf_ase_calculate_route (ospf, lsa);
+        }
       /* kevinm: And add the NSSA routes in ospf_top */
       LSDB_LOOP (NSSA_LSDB (ospf),rn,lsa)
       		ospf_ase_calculate_route(ospf,lsa);
@@ -746,13 +761,13 @@ ospf_ase_unregister_external_lsa (struct ospf_lsa *lsa, struct ospf *top)
   struct prefix_ipv4 p;
   struct list *lst;
   struct as_external_lsa *al;
-  zlog_debug("in func ospf_ase_unregister_external_lsa");
+  /// zlog_debug("in func ospf_ase_unregister_external_lsa");
   if(lsa->phase_count!=0)
   {
     if(lsa->lock<=2)
     {
       lsa->lock=3;
-      zlog_debug("modify lsa->lock=3 when lock<3");
+      /// zlog_debug("modify lsa->lock=3 when lock<3");
     }
   }
 
@@ -770,7 +785,7 @@ ospf_ase_unregister_external_lsa (struct ospf_lsa *lsa, struct ospf *top)
     listnode_delete (lst, lsa);
     ospf_lsa_unlock (&lsa); /* external_lsas list */
   }
-  zlog_debug("after func ospf_ase_unregister_external_lsa,lsa->lock=%d",lsa->lock);
+  /// zlog_debug("after func ospf_ase_unregister_external_lsa,lsa->lock=%d",lsa->lock);
 }
 
 void
@@ -819,13 +834,14 @@ ospf_ase_incremental_update (struct ospf *ospf, struct ospf_lsa *lsa)
   
   rn = route_node_lookup (ospf->new_table, (struct prefix *) &p);
   if (rn)
-    {
-      route_unlock_node (rn);
-      if (rn->info)
-	return;
-    }
+  {
+    route_unlock_node (rn);
+    if (rn->info)
+      return;
+  }
 
   rn = route_node_lookup (ospf->external_lsas, (struct prefix *) &p);
+  /// zlog_debug("in func ospf_ase_incremental_update, p->s_addr = %x", p.prefix.s_addr);
   assert (rn); 
   assert (rn->info);
   lsas = rn->info;

@@ -49,6 +49,7 @@
 #include "ospfd/ospf_route.h"
 #include "ospfd/ospf_ase.h"
 #include "ospfd/ospf_zebra.h"
+#include "ospfd/ospf_vty.h"
 
 
 u_int32_t
@@ -239,8 +240,8 @@ ospf_lsa_dup (struct ospf_lsa *lsa)
      queue (which it's not a member of.)
      XXX: Should we add the LSA to the refresh_list queue? */
   new->refresh_list = -1;
-
-  //copy phase matrix
+  // ======================  wyc add ===========================
+  //copy phase matrix  
   new->links_count=lsa->links_count;
   new->phase_count=lsa->phase_count;
   if(new->phase_count!=0)
@@ -254,7 +255,8 @@ ospf_lsa_dup (struct ospf_lsa *lsa)
         for(int j=0;j<new->phase_count;++j)
         {
           new->phase_matrix[i][j] = lsa->phase_matrix[i][j];
-          zlog_debug("lsa->phase_matrix[%d][%d]=%d",i,j,lsa->phase_matrix[i][j]);
+          if(MY_DEBUG)
+            zlog_debug("lsa->phase_matrix[%d][%d]=%d",i,j,lsa->phase_matrix[i][j]);
         }
   }
 
@@ -324,23 +326,27 @@ ospf_lsa_unlock (struct ospf_lsa **lsa)
   /* This is sanity check. */
   if (!lsa || !*lsa)
     return;
-  //zlog_debug("in ospf_lsa_unlock 1");
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsa_unlock 1");
   (*lsa)->lock--;
-  //zlog_debug("in ospf_lsa_unlock 2,lsa->lock=%d",(*lsa)->lock);
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsa_unlock 2,lsa->lock=%d",(*lsa)->lock);
+
   assert ((*lsa)->lock >= 0);
-  //zlog_debug("in ospf_lsa_unlock 3");
-  if((*lsa)->phase_count!=0)
-  {
-    SET_FLAG((*lsa)->flags, OSPF_LSA_DISCARD);
-  }
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsa_unlock 3");
+
+  SET_FLAG((*lsa)->flags, OSPF_LSA_DISCARD);
+  // ====================    end   ===============================
   if ((*lsa)->lock == 0)
-    {
-      //zlog_debug("in ospf_lsa_unlock 4,lock=0 and release,lsa->flag=%x,assert=%x",(*lsa)->flags,CHECK_FLAG((*lsa)->flags, OSPF_LSA_DISCARD));
-      assert (CHECK_FLAG ((*lsa)->flags, OSPF_LSA_DISCARD));
-      
-      ospf_lsa_free (*lsa);
-      *lsa = NULL;
-    }
+  {
+    // if(MY_DEBUG)
+    //   zlog_debug("in ospf_lsa_unlock 4,lock=0 and release,lsa->flag=%x,assert=%x",(*lsa)->flags,CHECK_FLAG((*lsa)->flags, OSPF_LSA_DISCARD));
+    assert (CHECK_FLAG ((*lsa)->flags, OSPF_LSA_DISCARD));
+    
+    ospf_lsa_free (*lsa);
+    *lsa = NULL;
+  }
 }
 
 /* Check discard flag. */
@@ -727,6 +733,17 @@ lsa_link_se_set (struct stream *s, struct ospf_interface *oi)
   return links;
 }
 
+static int lsa_link_info_set(struct stream *s)
+{
+  int links = 0;
+  struct in_addr id, mask;
+  mask.s_addr = 0;
+  id.s_addr = (global_phase << 16) + (station_info_curr.xadd << 8) + (station_info_curr.yadd); 
+  // id.s_addr = (97 << 16) + (98 << 8) +99;
+  links += link_info_set (s, id, mask, LSA_LINK_TYPE_INFO, 0, OSPF_OUTPUT_COST_DEFAULT);
+  return links;
+}
+
 /* Set router-LSA link information. */
 static int
 router_lsa_link_set (struct stream *s, struct ospf_area *area)
@@ -734,8 +751,8 @@ router_lsa_link_set (struct stream *s, struct ospf_area *area)
   struct listnode *node;
   struct ospf_interface *oi;
   int links = 0;
-
-  zlog_debug("in func router_lsa_link_set 1");
+  if(MY_DEBUG)
+    zlog_debug("in func router_lsa_link_set 1");
   
   for (ALL_LIST_ELEMENTS_RO (area->oiflist, node, oi))
     {
@@ -748,36 +765,36 @@ router_lsa_link_set (struct stream *s, struct ospf_area *area)
 
       /* Check interface is up, OSPF is enable. */
       if (if_is_operative (ifp))
-	{
-	  if (oi->state != ISM_Down)
-	    {
-	      /* Describe each link. */
-	      switch (oi->type)
-		{
-		case OSPF_IFTYPE_POINTOPOINT:
-		  links += lsa_link_ptop_set (s, oi);
-		  break;
-		case OSPF_IFTYPE_BROADCAST:
-		  links += lsa_link_broadcast_set (s, oi);
-		  break;
-		case OSPF_IFTYPE_NBMA:
-		  links += lsa_link_nbma_set (s, oi);
-		  break;
-		case OSPF_IFTYPE_POINTOMULTIPOINT:
-		  links += lsa_link_ptomp_set (s, oi);
-		  break;
-		case OSPF_IFTYPE_VIRTUALLINK:
-		  links += lsa_link_virtuallink_set (s, oi);
-		  break;
-		case OSPF_IFTYPE_LOOPBACK:
-		  links += lsa_link_loopback_set (s, oi); 
-      break;
-
-		}
-	    }
-	}
+      {
+        if (oi->state != ISM_Down)
+          {
+            /* Describe each link. */
+            switch (oi->type)
+            {
+            case OSPF_IFTYPE_POINTOPOINT:
+              links += lsa_link_ptop_set (s, oi);
+              break;
+            case OSPF_IFTYPE_BROADCAST:
+              links += lsa_link_broadcast_set (s, oi);
+              break;
+            case OSPF_IFTYPE_NBMA:
+              links += lsa_link_nbma_set (s, oi);
+              break;
+            case OSPF_IFTYPE_POINTOMULTIPOINT:
+              links += lsa_link_ptomp_set (s, oi);
+              break;
+            case OSPF_IFTYPE_VIRTUALLINK:
+              links += lsa_link_virtuallink_set (s, oi);
+              break;
+            case OSPF_IFTYPE_LOOPBACK:
+              links += lsa_link_loopback_set (s, oi); 
+              break;
+            }
+          }
+      }
     }
-
+    // ========================================== wyc modify ============================
+    links += lsa_link_info_set(s);
   return links;
 }
 
@@ -965,7 +982,8 @@ ospf_router_lsa_refresh (struct ospf_lsa *lsa)
   struct ospf_area *area = lsa->area;
   struct ospf_lsa *new;
   assert(area!=NULL);
-  zlog_debug("in func ospf_router_lsa_refresh,area->id=%x",area->area_id.s_addr);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_router_lsa_refresh,area->id=%x",area->area_id.s_addr);
   //zlog_debug("&lsa->area=%x,area->ospf->backbone=%x",lsa->area,area->ospf->backbone);
   //zlog_debug("1");
   /* Sanity check. */
@@ -1021,13 +1039,15 @@ ospf_router_lsa_update_area (struct ospf_area *area)
   /* Now refresh router-LSA. */
   if (area->router_lsa_self)
   {
-    //zlog_debug ("in func ospf_router_lsa_update_area, have router lsa self");
+    if(MY_DEBUG)
+      zlog_debug ("in func ospf_router_lsa_update_area, have router lsa self");
     ospf_lsa_refresh (area->ospf, area->router_lsa_self);
   }
   /* Newly originate router-LSA. */
   else
   {
-    //zlog_debug ("in func ospf_router_lsa_update_area, don't have router lsa self");
+    if(MY_DEBUG)
+      zlog_debug ("in func ospf_router_lsa_update_area, don't have router lsa self");
     ospf_router_lsa_originate (area);
   }
   return 0;
@@ -1724,7 +1744,11 @@ ospf_external_lsa_body_set (struct stream *s, struct external_info *ei,
   stream_put_ipv4 (s, fwd_addr.s_addr);
   
   /* Put route tag -- This value should be introduced from configuration. */
-  stream_putl (s, 0);
+  // stream_putl (s, 0);
+  // ======================== wyc modify ================================
+  // unsigned int info = (97 << 16) + (98 << 8) + (99);
+  unsigned int info = (global_phase << 16) + (station_info_curr.xadd << 8) + station_info_curr.yadd;
+  stream_putl (s, info);
 }
 
 /* Create new external-LSA. */
@@ -1912,7 +1936,9 @@ ospf_lsa_translated_nssa_new (struct ospf *ospf,
    
   /* copy over Type-7 data to new */
   extnew->e[0].tos = ext->e[0].tos;
+  // ======================= wyc modify ==========================
   extnew->e[0].route_tag = ext->e[0].route_tag;
+  // extnew->e[0].route_tag = 0;
   extnew->e[0].fwd_addr.s_addr = ext->e[0].fwd_addr.s_addr;
   new->data->ls_seqnum = type7->data->ls_seqnum;
 
@@ -2078,7 +2104,10 @@ ospf_translated_nssa_refresh (struct ospf *ospf, struct ospf_lsa *type7,
 int
 is_prefix_default (struct prefix_ipv4 *p)
 {
+  // ===================== wyc modify for ASEL-DR flood ============================
   return 0;
+
+  // ===================== Quagga 0.99.21 Code =====================================
   // struct prefix_ipv4 q;
 
   // q.family = AF_INET;
@@ -2205,16 +2234,16 @@ ospf_default_external_info (struct ospf *ospf)
   /* First, lookup redistributed default route. */
   for (type = 0; type <= ZEBRA_ROUTE_MAX; type++)
     if (EXTERNAL_INFO (type) && type != ZEBRA_ROUTE_OSPF)
-      {
-	rn = route_node_lookup (EXTERNAL_INFO (type), (struct prefix *) &p);
-	if (rn != NULL)
-	  {
-	    route_unlock_node (rn);
-	    assert (rn->info);
-	    if (ospf_redistribute_check (ospf, rn->info, NULL))
-	      return rn->info;
-	  }
-      }
+    {
+      rn = route_node_lookup (EXTERNAL_INFO (type), (struct prefix *) &p);
+      if (rn != NULL)
+        {
+          route_unlock_node (rn);
+          assert (rn->info);
+          if (ospf_redistribute_check (ospf, rn->info, NULL))
+            return rn->info;
+        }
+    }
 
   return NULL;
 }
@@ -2345,13 +2374,13 @@ ospf_external_lsa_refresh_default (struct ospf *ospf)
   {
     if (lsa)
     {
-      //if (IS_DEBUG_OSPF_EVENT)
+      if (IS_DEBUG_OSPF_EVENT)
         zlog_debug ("LSA[Type5:0.0.0.0]: Refresh AS-external-LSA %p", lsa);
       ospf_external_lsa_refresh (ospf, lsa, ei, LSA_REFRESH_FORCE);
     }
     else
 	  {
-      //if (IS_DEBUG_OSPF_EVENT)
+      if (IS_DEBUG_OSPF_EVENT)
         zlog_debug ("LSA[Type5:0.0.0.0]: Originate AS-external-LSA");
       ospf_external_lsa_originate (ospf, ei);
 	  }
@@ -2360,7 +2389,7 @@ ospf_external_lsa_refresh_default (struct ospf *ospf)
   {
     if (lsa)
     {
-      //if (IS_DEBUG_OSPF_EVENT)
+      if (IS_DEBUG_OSPF_EVENT)
         zlog_debug ("LSA[Type5:0.0.0.0]: Flush AS-external-LSA");
       ospf_refresher_unregister_lsa (ospf, lsa);
       ospf_lsa_flush_as (ospf, lsa);
@@ -2489,10 +2518,12 @@ ospf_router_lsa_install (struct ospf *ospf, struct ospf_lsa *new,
 	return new; /* ignore stale LSA */
       if(area->router_lsa_self!=NULL)
       {
-        zlog_debug("in func ospf_router_lsa_install,router_lsa_self->lock=%d",area->router_lsa_self->lock);
+        if(MY_DEBUG)
+          zlog_debug("in func ospf_router_lsa_install,router_lsa_self->lock=%d",area->router_lsa_self->lock);
         if(area->router_lsa_self->phase_count!=0)
         {
-          zlog_debug("this lsa has phase");
+          if(MY_DEBUG)
+            zlog_debug("this lsa has phase");
           area->router_lsa_self->lock=1;
         }
       }
@@ -2500,7 +2531,8 @@ ospf_router_lsa_install (struct ospf *ospf, struct ospf_lsa *new,
       /* Set self-originated router-LSA. */
       ospf_lsa_unlock (&area->router_lsa_self);
       area->router_lsa_self = ospf_lsa_lock (new);
-      zlog_debug("in func ospf_router_lsa_install,router_lsa_self install success");
+      if(MY_DEBUG)
+        zlog_debug("in func ospf_router_lsa_install,router_lsa_self install success");
       ospf_refresher_register_lsa (ospf, new);
     }
   if (rt_recalc)
@@ -2612,17 +2644,23 @@ ospf_external_lsa_install (struct ospf *ospf, struct ospf_lsa *new,
 			   int rt_recalc)
 {
   ospf_ase_register_external_lsa (new, ospf);
+
+
   /* If LSA is not self-originated, calculate an external route. */
   if (rt_recalc)
-    {
-      /* RFC 2328 Section 13.2 AS-external-LSAs
-            The best route to the destination described by the AS-
-            external-LSA must be recalculated (see Section 16.6).
-      */
+  {
+    /* RFC 2328 Section 13.2 AS-external-LSAs
+          The best route to the destination described by the AS-
+          external-LSA must be recalculated (see Section 16.6).
+    */
 
-      if (!IS_LSA_SELF (new))
-        ospf_ase_incremental_update (ospf, new);
+    if (!IS_LSA_SELF (new))
+    {
+      if(MY_DEBUG)
+        zlog_debug("call ospf_ase_incremental_update 1");
+      ospf_ase_incremental_update (ospf, new);
     }
+  }
 
   if (new->data->type == OSPF_AS_NSSA_LSA)
     {
@@ -2654,7 +2692,8 @@ ospf_discard_from_db (struct ospf *ospf,
 		      struct ospf_lsdb *lsdb, struct ospf_lsa *lsa)
 {
   struct ospf_lsa *old;
-  zlog_debug("in func ospf_discard_from_db,lsa->phase_count=%d",lsa->phase_count);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_discard_from_db,lsa->phase_count = %d", lsa->phase_count);
   if (!lsdb)
     {
       zlog_warn ("%s: Called with NULL lsdb!", __func__);
@@ -2693,11 +2732,14 @@ ospf_discard_from_db (struct ospf *ospf,
       ospf_ls_retransmit_delete_nbr_area (old->area, old);
       break;
     }
-  zlog_debug("in func ospf_discard_from_db 2");
+  // if(MY_DEBUG)
+  //   zlog_debug("in func ospf_discard_from_db 2");
   ospf_lsa_maxage_delete (ospf, old);
-  zlog_debug("in func ospf_discard_from_db 3");
+  // if(MY_DEBUG)
+  //   zlog_debug("in func ospf_discard_from_db 3");
   ospf_lsa_discard (old);
-  zlog_debug("after func ospf_discard_from_db");
+  if(MY_DEBUG)
+    zlog_debug("after func ospf_discard_from_db");
 }
 
 struct ospf_lsa *
@@ -2723,6 +2765,7 @@ ospf_lsa_install (struct ospf *ospf, struct ospf_interface *oi,
 #ifdef HAVE_OPAQUE_LSA
     case OSPF_OPAQUE_AS_LSA:
 #endif /* HAVE_OPAQUE_LSA */
+
       lsdb = ospf->lsdb;
       break;
     default:
@@ -2762,8 +2805,8 @@ ospf_lsa_install (struct ospf *ospf, struct ospf_interface *oi,
   rt_recalc = 0;
   if (  old == NULL || ospf_lsa_different(old, lsa))
     rt_recalc = 1;
-
-  zlog_debug("in func ospf_lsa_install 1,lsa->id=%x,adv_router=%x",lsa->data->id.s_addr,lsa->data->adv_router.s_addr);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_lsa_install 1,lsa->id=%x,adv_router=%x",lsa->data->id.s_addr,lsa->data->adv_router.s_addr);
   /*
      Sequence number check (Section 14.1 of rfc 2328)
      "Premature aging is used when it is time for a self-originated
@@ -2807,18 +2850,20 @@ ospf_lsa_install (struct ospf *ospf, struct ospf_interface *oi,
   /* discard old LSA from LSDB */
   if (old != NULL)
     ospf_discard_from_db (ospf, lsdb, lsa);
-
-  zlog_debug("in func ospf_lsa_install,after ospf_discard_from_db");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_lsa_install,after ospf_discard_from_db");
 
   /* Calculate Checksum if self-originated?. */
   if (IS_LSA_SELF (lsa))
     ospf_lsa_checksum (lsa->data);
-  zlog_debug("in func ospf_lsa_install,after ospf_lsa_checksum");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_lsa_install,after ospf_lsa_checksum");
   /* Insert LSA to LSDB. */
   ospf_lsdb_add (lsdb, lsa);
 
   lsa->lsdb = lsdb;
-  zlog_debug("in func ospf_lsa_install 2");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_lsa_install 2");
   /* Do LSA specific installation process. */
   switch (lsa->data->type)
     {
@@ -2855,7 +2900,8 @@ ospf_lsa_install (struct ospf *ospf, struct ospf_interface *oi,
     default: /* type-6,8,9....nothing special */
       break;
     }
-  zlog_debug("in func ospf_lsa_install 3");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_lsa_install 3");
   if (new == NULL)
     return new;  /* Installation failed, cannot proceed further -- endo. */
 
@@ -2898,7 +2944,8 @@ ospf_lsa_install (struct ospf *ospf, struct ospf_interface *oi,
                    lsa);
       ospf_lsa_flush (ospf, lsa);
     }
-  zlog_debug("in func ospf_lsa_install 4");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_lsa_install 4");
   return new;
 }
 
@@ -2946,52 +2993,48 @@ ospf_maxage_lsa_remover (struct thread *thread)
 
   if (!reschedule)
     for (ALL_LIST_ELEMENTS (ospf->maxage_lsa, node, nnode, lsa))
+    {
+      if (lsa->retransmit_counter > 0)
       {
-        if (lsa->retransmit_counter > 0)
-          {
-            reschedule = 1;
-            continue;
-          }
-        
-        /* TODO: maybe convert this function to a work-queue */
-        if (thread_should_yield (thread))
-          OSPF_TIMER_ON (ospf->t_maxage, ospf_maxage_lsa_remover, 0);
-          
-        /* Remove LSA from the LSDB */
-        if (IS_LSA_SELF (lsa))
-          if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
-            zlog_debug ("LSA[Type%d:%s]: LSA 0x%lx is self-originated: ",
-                       lsa->data->type, inet_ntoa (lsa->data->id), (u_long)lsa);
-
-        if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
-          zlog_debug ("LSA[Type%d:%s]: MaxAge LSA removed from list",
-                     lsa->data->type, inet_ntoa (lsa->data->id));
-
-	if (CHECK_FLAG (lsa->flags, OSPF_LSA_PREMATURE_AGE))
-          {
-            if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
-              zlog_debug ("originating new lsa for lsa 0x%p\n", lsa);
-            ospf_lsa_refresh (ospf, lsa);
-          }
-
-	/* Remove from lsdb. */
-	if (lsa->lsdb)
-	  {
-	    ospf_discard_from_db (ospf, lsa->lsdb, lsa);
-	    ospf_lsdb_delete (lsa->lsdb, lsa);
-          }
-        else
-          zlog_warn ("%s: LSA[Type%d:%s]: No associated LSDB!", __func__,
-                     lsa->data->type, inet_ntoa (lsa->data->id));
+        reschedule = 1;
+        continue;
       }
+      
+      /* TODO: maybe convert this function to a work-queue */
+      if (thread_should_yield (thread))
+        OSPF_TIMER_ON (ospf->t_maxage, ospf_maxage_lsa_remover, 0);
+        
+      /* Remove LSA from the LSDB */
+      if (IS_LSA_SELF (lsa))
+        if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
+          zlog_debug ("LSA[Type%d:%s]: LSA 0x%lx is self-originated: ", lsa->data->type, inet_ntoa (lsa->data->id), (u_long)lsa);
+
+      if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
+        zlog_debug ("LSA[Type%d:%s]: MaxAge LSA removed from list", lsa->data->type, inet_ntoa (lsa->data->id));
+
+      if (CHECK_FLAG (lsa->flags, OSPF_LSA_PREMATURE_AGE))
+      {
+        if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
+          zlog_debug ("originating new lsa for lsa 0x%p\n", lsa);
+        ospf_lsa_refresh (ospf, lsa);
+      }
+
+/* Remove from lsdb. */
+      if (lsa->lsdb)
+      {
+        ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+        ospf_lsdb_delete (lsa->lsdb, lsa);
+      }
+      else
+        zlog_warn ("%s: LSA[Type%d:%s]: No associated LSDB!", __func__, lsa->data->type, inet_ntoa (lsa->data->id));
+    }
 
   /*    A MaxAge LSA must be removed immediately from the router's link
         state database as soon as both a) it is no longer contained on any
         neighbor Link state retransmission lists and b) none of the router's
         neighbors are in states Exchange or Loading. */
   if (reschedule)
-    OSPF_TIMER_ON (ospf->t_maxage, ospf_maxage_lsa_remover,
-                   ospf->maxage_delay);
+    OSPF_TIMER_ON (ospf->t_maxage, ospf_maxage_lsa_remover, ospf->maxage_delay);
 
   return 0;
 }
@@ -3020,21 +3063,20 @@ ospf_lsa_maxage (struct ospf *ospf, struct ospf_lsa *lsa)
   /* When we saw a MaxAge LSA flooded to us, we put it on the list
      and schedule the MaxAge LSA remover. */
   if (CHECK_FLAG(lsa->flags, OSPF_LSA_IN_MAXAGE))
-    {
-      if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
-	zlog_debug ("LSA[Type%d:%s]: %p already exists on MaxAge LSA list",
-		   lsa->data->type, inet_ntoa (lsa->data->id), lsa);
-      return;
-    }
+  {
+    if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
+      zlog_debug ("LSA[Type%d:%s]: %p already exists on MaxAge LSA list", lsa->data->type, inet_ntoa (lsa->data->id), lsa);
+    return;
+  }
 
   listnode_add (ospf->maxage_lsa, ospf_lsa_lock (lsa));
   SET_FLAG(lsa->flags, OSPF_LSA_IN_MAXAGE);
 
   if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
     zlog_debug ("LSA[%s]: MaxAge LSA remover scheduled.", dump_lsa_key (lsa));
-
-  OSPF_TIMER_ON (ospf->t_maxage, ospf_maxage_lsa_remover,
-                 ospf->maxage_delay);
+  if(MY_DEBUG)
+    zlog_debug("in ospf_lsa_maxage, ospf->maxage_delay = %d", ospf->maxage_delay);
+  OSPF_TIMER_ON (ospf->t_maxage, ospf_maxage_lsa_remover, ospf->maxage_delay);
 }
 
 static int
@@ -3048,36 +3090,38 @@ ospf_lsa_maxage_walker_remover (struct ospf *ospf, struct ospf_lsa *lsa)
     /* Self-originated LSAs should NOT time-out instead,
        they're flushed and submitted to the max_age list explicitly. */
     if (!ospf_lsa_is_self_originated (ospf, lsa))
-      {
-	if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
-	  zlog_debug("LSA[%s]: is MaxAge", dump_lsa_key (lsa));
+    {
+      if (IS_DEBUG_OSPF (lsa, LSA_FLOODING))
+        zlog_debug("LSA[%s]: is MaxAge", dump_lsa_key (lsa));
 
-        switch (lsa->data->type)
-          {
+      switch (lsa->data->type)
+      {
 #ifdef HAVE_OPAQUE_LSA
-          case OSPF_OPAQUE_LINK_LSA:
-          case OSPF_OPAQUE_AREA_LSA:
-          case OSPF_OPAQUE_AS_LSA:
-            /*
-             * As a general rule, whenever network topology has changed
-             * (due to an LSA removal in this case), routing recalculation
-             * should be triggered. However, this is not true for opaque
-             * LSAs. Even if an opaque LSA instance is going to be removed
-             * from the routing domain, it does not mean a change in network
-             * topology, and thus, routing recalculation is not needed here.
-             */
-            break;
+        case OSPF_OPAQUE_LINK_LSA:
+        case OSPF_OPAQUE_AREA_LSA:
+        case OSPF_OPAQUE_AS_LSA:
+          /*
+            * As a general rule, whenever network topology has changed
+            * (due to an LSA removal in this case), routing recalculation
+            * should be triggered. However, this is not true for opaque
+            * LSAs. Even if an opaque LSA instance is going to be removed
+            * from the routing domain, it does not mean a change in network
+            * topology, and thus, routing recalculation is not needed here.
+            */
+          break;
 #endif /* HAVE_OPAQUE_LSA */
-          case OSPF_AS_EXTERNAL_LSA:
-          case OSPF_AS_NSSA_LSA:
-	    ospf_ase_incremental_update (ospf, lsa);
-            break;
-          default:
-	    ospf_spf_calculate_schedule (ospf);
-            break;
-          }
-	ospf_lsa_maxage (ospf, lsa);
+        case OSPF_AS_EXTERNAL_LSA:
+        case OSPF_AS_NSSA_LSA:
+          if(MY_DEBUG)
+            zlog_debug("call ospf_ase_incremental_update 2");
+          ospf_ase_incremental_update (ospf, lsa);
+          break;
+        default:
+          ospf_spf_calculate_schedule (ospf);
+          break;
       }
+      ospf_lsa_maxage (ospf, lsa);
+    }
 
   if (IS_LSA_MAXAGE (lsa) && !ospf_lsa_is_self_originated (ospf, lsa))
     if (LS_AGE (lsa) > OSPF_LSA_MAXAGE + 30)
@@ -3099,38 +3143,37 @@ ospf_lsa_maxage_walker (struct thread *thread)
   ospf->t_maxage_walker = NULL;
 
   for (ALL_LIST_ELEMENTS (ospf->areas, node, nnode, area))
-    {
-      LSDB_LOOP (ROUTER_LSDB (area), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
-      LSDB_LOOP (NETWORK_LSDB (area), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
-      LSDB_LOOP (SUMMARY_LSDB (area), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
-      LSDB_LOOP (ASBR_SUMMARY_LSDB (area), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
+  {
+    LSDB_LOOP (ROUTER_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
+    LSDB_LOOP (NETWORK_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
+    LSDB_LOOP (SUMMARY_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
+    LSDB_LOOP (ASBR_SUMMARY_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
 #ifdef HAVE_OPAQUE_LSA
-      LSDB_LOOP (OPAQUE_AREA_LSDB (area), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
-      LSDB_LOOP (OPAQUE_LINK_LSDB (area), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
+    LSDB_LOOP (OPAQUE_AREA_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
+    LSDB_LOOP (OPAQUE_LINK_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
 #endif /* HAVE_OPAQUE_LSA */
-      LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
-        ospf_lsa_maxage_walker_remover (ospf, lsa);
-    }
+    LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
+  }
 
   /* for AS-external-LSAs. */
   if (ospf->lsdb)
-    {
-      LSDB_LOOP (EXTERNAL_LSDB (ospf), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
+  {
+    LSDB_LOOP (EXTERNAL_LSDB (ospf), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
 #ifdef HAVE_OPAQUE_LSA
-      LSDB_LOOP (OPAQUE_AS_LSDB (ospf), rn, lsa)
-	ospf_lsa_maxage_walker_remover (ospf, lsa);
+    LSDB_LOOP (OPAQUE_AS_LSDB (ospf), rn, lsa)
+      ospf_lsa_maxage_walker_remover (ospf, lsa);
 #endif /* HAVE_OPAQUE_LSA */
-    }
+  }
 
-  OSPF_TIMER_ON (ospf->t_maxage_walker, ospf_lsa_maxage_walker,
-		 OSPF_LSA_MAXAGE_CHECK_INTERVAL);
+  OSPF_TIMER_ON (ospf->t_maxage_walker, ospf_lsa_maxage_walker, OSPF_LSA_MAXAGE_CHECK_INTERVAL);
   return 0;
 }
 
@@ -3252,7 +3295,6 @@ ospf_lsa_lookup_by_header (struct ospf_area *area, struct lsa_header *lsah)
 #endif /* HAVE_OPAQUE_LSA */
 
   match = ospf_lsa_lookup (area, lsah->type, lsah->id, lsah->adv_router);
-
   if (match == NULL)
     if (IS_DEBUG_OSPF (lsa, LSA) == OSPF_DEBUG_LSA)
       zlog_debug ("LSA[Type%d:%s]: Lookup by header, NO MATCH",
@@ -3378,14 +3420,14 @@ ospf_lsa_flush_self_originated (struct ospf_neighbor *nbr,
 	        if (onbr != nbr->oi->nbr_self && onbr->status >= NSM_Exchange)
           {
             ospf_ls_upd_send_lsa (onbr, self, OSPF_SEND_PACKET_DIRECT);
-            zlog_debug("send upd in ospf_lsa 1");
+            //zlog_debug("send upd in ospf_lsa 1");
           }
 	          
     }
   else
   {
     ospf_ls_upd_send_lsa (nbr, self, OSPF_SEND_PACKET_INDIRECT);
-    zlog_debug("send upd in ospf_lsa 2");
+    //zlog_debug("send upd in ospf_lsa 2");
   }
   
 
@@ -3762,7 +3804,8 @@ ospf_refresher_unregister_lsa (struct ospf *ospf, struct ospf_lsa *lsa)
 {
   assert (lsa->lock > 0);
   assert (IS_LSA_SELF (lsa));
-  zlog_debug("in func ospf_refresher_unregister_lsa, lsa->refresh_list=%d",lsa->refresh_list);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_refresher_unregister_lsa, lsa->refresh_list = %d", lsa->refresh_list);
   if (lsa->refresh_list >= 0)
     {
       struct list *refresh_list = ospf->lsa_refresh_queue.qs[lsa->refresh_list];

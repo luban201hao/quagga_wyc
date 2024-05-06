@@ -103,6 +103,8 @@ struct thread_master *master;
 /* Process ID saved for use by init system */
 const char *pid_file = PATH_OSPF6D_PID;
 
+char *vtypath=NULL;
+
 /* Help information display. */
 static void
 usage (char *progname, int status)
@@ -234,7 +236,7 @@ main (int argc, char *argv[], char *envp[])
   /* Command line argument treatment. */
   while (1) 
     {
-      opt = getopt_long (argc, argv, "df:i:z:hp:A:P:u:g:vC", longopts, 0);
+      opt = getopt_long (argc, argv, "df:i:z:hp:A:P:u:g:vCx:", longopts, 0);
     
       if (opt == EOF)
         break;
@@ -242,6 +244,9 @@ main (int argc, char *argv[], char *envp[])
       switch (opt) 
         {
         case 0:
+          break;
+        case 'x':
+          vtypath=optarg;
           break;
         case 'd':
           daemon_mode = 1;
@@ -341,7 +346,11 @@ main (int argc, char *argv[], char *envp[])
   /* Make ospf6 vty socket. */
   if (!vty_port)
     vty_port = OSPF6_VTY_PORT;
-  vty_serv_sock (vty_addr, vty_port, OSPF6_VTYSH_PATH);
+
+  if(vtypath==NULL)
+    vty_serv_sock (vty_addr, vty_port, OSPF6_VTYSH_PATH);
+  else
+    vty_serv_sock (vty_addr, vty_port, vtypath);
 
   /* Print start message */
   zlog_notice ("OSPF6d (Quagga-%s ospf6d-%s) starts: vty@%d",

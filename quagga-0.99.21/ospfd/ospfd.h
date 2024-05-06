@@ -127,6 +127,11 @@
 #define OSPF_LS_REFRESH_SHIFT       (60 * 15)
 #define OSPF_LS_REFRESH_JITTER      60
 
+// ====================  wyc add =====================
+#define T_TEST 10
+// ===================================================
+
+
 /* OSPF master for system wide configuration and variables. */
 struct ospf_master
 {
@@ -255,8 +260,13 @@ struct ospf
   struct thread *t_external_lsa;	/* AS-external-LSA origin timer. */
 
   //help calc when phase change, delay 10s then modify tos and calc
+  
   struct thread *t_spf_help;
   struct thread *t_ase_help;
+  struct thread *t_manageLSDB;
+  struct thread *t_change_global_phase;
+  struct thread *t_modify_static;
+
 #ifdef HAVE_OPAQUE_LSA
   struct thread *t_opaque_lsa_self;	/* Type-11 Opaque-LSAs origin event. */
 #endif /* HAVE_OPAQUE_LSA */

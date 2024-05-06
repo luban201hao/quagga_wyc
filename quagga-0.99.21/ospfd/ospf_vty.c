@@ -49,29 +49,78 @@
 #include "ospfd/ospf_dump.h"
 
 int global_phase;
+int last_phase;
+int next_phase_tmp;
 int phase_all;
+struct station_info station_info_curr;
+// peer ip address
+char *peer_oa_str_static = NULL;
+// peer router_id 
+struct in_addr peer_router_id_static;
+int peer_enable = 1;
+int myself_is_left = 0;
+int myself_is_right = 0;
+struct neighbor_info_list *neighbor_info_list_cur;
+struct ase_info_list *ase_info_list_cur;
+struct se_ase_info_list *se_ase_info_list_cur;
+struct ospf_lsdb *backup_lsdb;
+struct se_info_list *se_info_list_cur;
+static struct se_info *se_info_new();
+// no matter add or delete, system(cmd_route) will cause ei_info getting and broadcast as-external-lsa
+// so predictable_ase_cnt++ when there is pridictable info add or delete
+// but we only broadcasr lsa when predictable_ase_cnt == zero
+int predictable_ase_cnt;
+char *if_se_name = NULL;
+static void remove_inside_oa_defailt(int, int);
+static void check_oa_station(void);
+static void gen_myself_default_route(int);
+static void gen_inside_oa_default_route(void);
+static void remove_outside_oa_default(int, int);
+static void load_outside_oa_default(int, int);
+static int check_need_outside_oa_default(void);
+static void gen_default_route(void);
+static int gen_default_route_helper(struct thread *);
+// for unpredictable link fails, we need running and backup lsa
+struct _default_info {
+  // store calc result
+  int curr_stat;
+  int mx;
+  int router_id_info[16];
+  // inside oa no need backup
+  struct ospf_lsa *self_default_route;
+  struct list *inside_oa_default_route;
+  // outside oa need backup: 0 for left, 1 for right
+  struct list *outside_oa_default_route[2];
+  struct list *outside_oa_default_route_backup[2];
+  
+  int left_cnt, right_cnt;
+
+} default_info;
+
 void fileToMatrix_str(const char *path,DATA_INFO_STR *data_info){
 
     FILE *file=NULL;
     //char c;
-    zlog_debug("in func fileToMatrix_str,%s",path);
+    if(MY_DEBUG)
+      zlog_debug("in func fileToMatrix_str,%s",path);
     file=fopen(path,"r");
 
     if(file==NULL){
-      zlog_debug("open file fail");
+      if(MY_DEBUG)
+        zlog_debug("open file fail");
       return;
     }
 
     //zlog_debug("open success!");
-
-    char str[200];
+    #define LINE_MAX_SIZE 512
+    char str[LINE_MAX_SIZE];
     int row_total=0;
-    while(fgets(str,200,file)!=NULL){
+    while(fgets(str,LINE_MAX_SIZE,file)!=NULL){
         //zlog_debug("get line");
         row_total++;
     }
-
-    zlog_debug("%d\n",row_total);
+    if(MY_DEBUG)
+      zlog_debug("%d",row_total);
 
     //record row count, then  count data in each line, record in line_total array
     data_info->row_total=row_total;
@@ -84,14 +133,15 @@ void fileToMatrix_str(const char *path,DATA_INFO_STR *data_info){
     int row_pos=0;
 
 
-    while(fgets(str,200,file)!=NULL){
+    while(fgets(str,LINE_MAX_SIZE,file)!=NULL){
         //get number count in each line
         line_total=0;
         token=strtok(str,",");
         while(token!=NULL){
             if(token[0]!='\r'&&token[0]!='\n')
                 line_total++;
-            zlog_debug("%s",token);
+            if(MY_DEBUG)
+              zlog_debug("%s",token);
             token=strtok(NULL,",");
         }
         //zlog_debug("line_total=%d",line_total);
@@ -103,7 +153,7 @@ void fileToMatrix_str(const char *path,DATA_INFO_STR *data_info){
 
     rewind(file);
     row_pos=0;
-    while(fgets(str,200,file)!=NULL){
+    while(fgets(str, LINE_MAX_SIZE, file)!=NULL){
         //store each number to matrix
         line_pos=0;
         //zlog_debug("str=%s",str);
@@ -129,7 +179,8 @@ void fileToMatrix_str(const char *path,DATA_INFO_STR *data_info){
 
         row_pos++;
     } 
-    zlog_debug("finish func fileToMatrix_str");
+    if(MY_DEBUG)
+      zlog_debug("finish func fileToMatrix_str");
     fclose(file);
 
 }
@@ -3587,6 +3638,8 @@ show_lsa_summary (struct vty *vty, struct ospf_lsa *lsa, int self)
 	  }
     
 	vty_out (vty, VTY_NEWLINE);
+
+  // ==========================   wyc add ===========================================
   zlog_debug("in func show_lsa_summary,lsa->phase_count=%d",lsa->phase_count);
   if(lsa->phase_count!=0)
   {
@@ -3695,6 +3748,7 @@ const char *link_type_desc[] =
   "Stub Network",
   "a Virtual Link",
   "a star earth link",
+  "link info",
 };
 
 const char *link_id_desc[] =
@@ -3705,6 +3759,7 @@ const char *link_id_desc[] =
   "Net",
   "Neighboring Router ID",
   "se link id",
+  "link info id",
 };
 
 const char *link_data_desc[] =
@@ -3715,6 +3770,7 @@ const char *link_data_desc[] =
   "Network Mask",
   "Router Interface address",
   "se link data",
+  "link info data",
 };
 
 /* Show router-LSA each Link information. */
@@ -3735,7 +3791,7 @@ show_ip_ospf_database_router_links (struct vty *vty,
 	       inet_ntoa (rl->link[i].link_id), VTY_NEWLINE);
       vty_out (vty, "     (Link Data) %s: %s%s", link_data_desc[type],
 	       inet_ntoa (rl->link[i].link_data), VTY_NEWLINE);
-      vty_out (vty, "      Number of TOS metrics: 0%s", VTY_NEWLINE);
+      vty_out (vty, "      Number of TOS metrics: %d%s", rl->link[i].tos, VTY_NEWLINE);
       vty_out (vty, "       TOS 0 Metric: %d%s",
 	       ntohs (rl->link[i].metric), VTY_NEWLINE);
       vty_out (vty, "%s", VTY_NEWLINE);
@@ -5061,10 +5117,10 @@ ospf_nbr_timer_update (struct ospf_interface *oi)
   for (rn = route_top (oi->nbrs); rn; rn = route_next (rn))
     if ((nbr = rn->info))
       {
-	nbr->v_inactivity = OSPF_IF_PARAM (oi, v_wait);
-	nbr->v_db_desc = OSPF_IF_PARAM (oi, retransmit_interval);
-	nbr->v_ls_req = OSPF_IF_PARAM (oi, retransmit_interval);
-	nbr->v_ls_upd = OSPF_IF_PARAM (oi, retransmit_interval);
+        nbr->v_inactivity = OSPF_IF_PARAM (oi, v_wait);
+        nbr->v_db_desc = OSPF_IF_PARAM (oi, retransmit_interval);
+        nbr->v_ls_req = OSPF_IF_PARAM (oi, retransmit_interval);
+        nbr->v_ls_upd = OSPF_IF_PARAM (oi, retransmit_interval);
       }
 }
 
@@ -8273,18 +8329,15 @@ DEFUN (output_lsdb,
 
         for(i = 0; i < ntohs (rl->links) && len > 0; len -= 12, i++)
         {
-          //此�?�连�?输出link_id,link_data将发生�?��?的重复？因而分开输出
+          //inet_ntoa can only be used once in an printf cause
           vty_out(vty,"#,%d,%s,",rl->link[i].type,inet_ntoa(rl->link[i].link_id));
           vty_out(vty,"%s,%d%s",inet_ntoa(rl->link[i].link_data),ntohs(rl->link[i].metric),VTY_NEWLINE);
 
           fprintf(file,"#,%d,%s,",rl->link[i].type,inet_ntoa(rl->link[i].link_id));
           fprintf(file,"%s,%d,\n",inet_ntoa(rl->link[i].link_data),ntohs(rl->link[i].metric));
         }
-
-
       }
     }
-    
   }
   fclose(file);
 
@@ -8292,180 +8345,167 @@ DEFUN (output_lsdb,
 
 }
 
-struct ospf_lsdb *vty_test_db;
+
 
 void input_lsdb_sub(const char *path)
 {
   DATA_INFO_STR data_info_str;
 
-  fileToMatrix_str(path,&data_info_str);
-  if(data_info_str.row_total==0)
+  fileToMatrix_str(path, &data_info_str);
+  if(data_info_str.row_total == 0)
   {
     return;
   }
 
-  int i,j,lsa_count;
+  int i, j, lsa_count;
 
-  lsa_count=0;
-  for(i=0;i<data_info_str.row_total;++i)
+  lsa_count = 0;
+  for(i = 0; i < data_info_str.row_total; ++i)
   {
-    if(data_info_str.matrix[i][0][0]=='!')
+    if(data_info_str.matrix[i][0][0] == '!')
     {
       lsa_count++;
     }
     
-    for(j=0;j<data_info_str.line_total[i];++j)
+    for(j = 0; j < data_info_str.line_total[i]; ++j)
     {
-      zlog_debug("input,matric[%d][%d]=%s",i,j,data_info_str.matrix[i][j]);
+      if(MY_DEBUG)
+        zlog_debug("input,matric[%d][%d]=%s",i, j, data_info_str.matrix[i][j]);
     }
-    
   }
 
   int *startline=(int *)calloc(lsa_count,sizeof(int));
   int *linkcount=(int *)calloc(lsa_count,sizeof(int));
-  j=0;
+  j = 0;
   
-  for(i=0;i<data_info_str.row_total;++i)
+  for(i = 0; i<data_info_str.row_total; ++i)
   {
     
-    if( data_info_str.matrix[i][0][0]=='!')
+    if(data_info_str.matrix[i][0][0] =='!')
     {
-      startline[j]=i;
-      linkcount[j]=0;
+      startline[j] = i;
+      linkcount[j] = 0;
       j++;
     }
-    else if(data_info_str.matrix[i][0][0]=='#')
+    else if(data_info_str.matrix[i][0][0] == '#')
     {
       linkcount[j-1]++;    
     }
   }
 
-  for(i=0;i<lsa_count;++i)
+  for(i = 0; i < lsa_count; ++i)
   {
-    zlog_debug("startline=%d,countline=%d",startline[i],linkcount[i]);
+    if(MY_DEBUG)
+      zlog_debug("startline=%d, countline=%d", startline[i], linkcount[i]);
   }
-  zlog_debug("there is %d lsas",lsa_count);
+  if(MY_DEBUG)
+    zlog_debug("there is %d lsas", lsa_count);
   
-  struct ospf_lsa *lsa;
-  struct stream *s=NULL;
+  struct ospf_lsa *lsa = NULL;
+  struct stream *s = NULL;
   struct lsa_header *lsah;
   struct in_addr temp_addr;
   struct router_lsa *rl;
-  int links_curlsa,link_count,lsa_length;
-  struct ospf *ospf=ospf_lookup ();
-  links_curlsa=0;
-  link_count=0;
-  lsa_length=0;
+  int links_curlsa, link_count, lsa_length;
+  struct ospf *ospf = ospf_lookup();
+  links_curlsa = 0;
+  link_count = 0;
+  lsa_length = 0;
 
   for(i=0;i<data_info_str.row_total;++i)
   {
-    zlog_debug("data_info_str.line_total[%d]:%d",i,data_info_str.line_total[i]);
+    if(MY_DEBUG)
+      zlog_debug("data_info_str.line_total[%d]:%d",i,data_info_str.line_total[i]);
     if(data_info_str.matrix[i][0][0]=='!')
     {
       
-      s=stream_new (OSPF_MAX_LSA_SIZE);
+      s = stream_new (OSPF_MAX_LSA_SIZE);
       lsa = ospf_lsa_new ();
       //zlog_debug("7");
-      lsah=(struct lsa_header *) STREAM_DATA (s);
-      lsah->ls_age=htons (OSPF_LSA_INITIAL_AGE);
-      lsah->options=(u_char) atoi (data_info_str.matrix[i][2]);
-      lsah->type=(u_char)atoi (data_info_str.matrix[i][3]);
+      lsah = (struct lsa_header *) STREAM_DATA (s);
+      lsah->ls_age = htons (OSPF_LSA_INITIAL_AGE);
+      lsah->options = (u_char) atoi (data_info_str.matrix[i][2]);
+      lsah->type = (u_char)atoi (data_info_str.matrix[i][3]);
 
-      inet_aton(data_info_str.matrix[i][4],&temp_addr);
-      lsah->id=temp_addr;
+      inet_aton(data_info_str.matrix[i][4], &temp_addr);
+      lsah->id = temp_addr;
 
-      inet_aton(data_info_str.matrix[i][5],&temp_addr);
-      lsah->adv_router=temp_addr;
+      inet_aton(data_info_str.matrix[i][5], &temp_addr);
+      lsah->adv_router = temp_addr;
 
-      lsah->ls_seqnum=htonl(atoi(data_info_str.matrix[i][6])+1);
+      lsah->ls_seqnum = htonl(atoi(data_info_str.matrix[i][6]) + 1);
       //lsah->checksum fang dao zui hou zai ji suan 
       
-      lsah->length=htons(atoi(data_info_str.matrix[i][8]));
+      lsah->length = htons(atoi(data_info_str.matrix[i][8]));
       //zlog_debug("8");
       stream_forward_endp (s, OSPF_LSA_HEADER_SIZE); 
       //zlog_debug("9");
-      lsa_length=OSPF_LSA_HEADER_SIZE;
-
-      zlog_debug("lsa header write successful");
-      
+      lsa_length = OSPF_LSA_HEADER_SIZE;
+      if(MY_DEBUG)
+        zlog_debug("lsa header write successful");
     }
-    else if(data_info_str.matrix[i][0][0]=='@')
+    else if(data_info_str.matrix[i][0][0] == '@')
     {
-      rl=(struct router_lsa *) STREAM_DATA (s);
+      rl = (struct router_lsa *) STREAM_DATA (s);
       rl->flags = (u_char) atoi(data_info_str.matrix[i][1]);
       rl->zero = (u_char) atoi(data_info_str.matrix[i][2]);
       rl->links = htons(atoi(data_info_str.matrix[i][3]));
       stream_forward_endp (s, 4);
 
+      links_curlsa = atoi(data_info_str.matrix[i][3]);
+      link_count = 0;
+      lsa_length += 4;
+      lsa->phase_count = atoi(data_info_str.matrix[i][4]);
+      lsa->links_count = links_curlsa;
 
-      links_curlsa=atoi(data_info_str.matrix[i][3]);
-      link_count=0;
-      lsa_length+=4;
-      lsa->phase_count=atoi(data_info_str.matrix[i][4]);
-      lsa->links_count=links_curlsa;
-
-      lsa->phase_matrix=(int **)calloc(links_curlsa,sizeof(int *));
-      for(j=0;j<links_curlsa;++j)
+      lsa->phase_matrix = (int **)calloc(links_curlsa,sizeof(int *));
+      for(j=0; j < links_curlsa; ++j)
       {
-        lsa->phase_matrix[j]=(int *)calloc(lsa->phase_count,sizeof(int));
+        lsa->phase_matrix[j] = (int *)calloc(lsa->phase_count,sizeof(int));
       }
-
-      zlog_debug("lsa length write successful,links_curlsa=%d",links_curlsa);
+      if(MY_DEBUG)
+        zlog_debug("lsa length write successful,links_curlsa=%d",links_curlsa);
 
     }
-    else if(data_info_str.matrix[i][0][0]=='#')
+    else if(data_info_str.matrix[i][0][0] == '#')
     {
       //inet_aton 将转�?为网络字节序，stream put会将主机字节序调整为网络字节序，两�?�调整后抵消
-      inet_aton(data_info_str.matrix[i][2],&temp_addr);
-      stream_putl(s,htonl(temp_addr.s_addr));//link_id
-      inet_aton(data_info_str.matrix[i][3],&temp_addr);
-      stream_putl(s,htonl(temp_addr.s_addr));//link_data
-      
-
-      stream_putc (s,atoi(data_info_str.matrix[i][1]));//type
-      stream_putc (s,0);//tos
-      stream_putw (s,atoi(data_info_str.matrix[i][4]));//metric
+      inet_aton(data_info_str.matrix[i][2], &temp_addr);
+      stream_putl(s, htonl(temp_addr.s_addr));//link_id
+      inet_aton(data_info_str.matrix[i][3], &temp_addr);
+      stream_putl(s, htonl(temp_addr.s_addr));//link_data
+      stream_putc (s, atoi(data_info_str.matrix[i][1]));//type
+      stream_putc (s, 0);//tos
+      stream_putw (s, atoi(data_info_str.matrix[i][4]));//metric
 
       for(j=0;j<lsa->phase_count;++j)
       {
         lsa->phase_matrix[link_count][j]=atoi(data_info_str.matrix[i][j+5]);
-        zlog_debug("lsa->phase_matrix[%d][%d]=%d",link_count,j,lsa->phase_matrix[link_count][j]);
+        if(MY_DEBUG)
+          zlog_debug("lsa->phase_matrix[%d][%d]=%d",link_count,j,lsa->phase_matrix[link_count][j]);
       }
       
-      lsa_length+=12;
+      lsa_length += 12;
       link_count++;
-      zlog_debug("lsa link write successful");
+      if(MY_DEBUG)
+        zlog_debug("lsa link write successful");
       //all links have been store in stream
-      if(link_count==links_curlsa)
+      if(link_count == links_curlsa)
       {
- 
-        zlog_debug("link full, begin install");
-        
- 
+        if(MY_DEBUG)
+          zlog_debug("link full, begin install");
         //zlog_debug("lsa length: %d,stream.size:%d",lsa_length,s->size);
-
-        lsa->data=ospf_lsa_data_new (lsa_length);
-        zlog_debug("input router lsa, intstall 1");
-        lsah=(struct lsa_header *) STREAM_DATA (s);
-        
-        zlog_debug("2");
-        memcpy(lsa->data,STREAM_DATA (s),lsa_length);
-        zlog_debug("3");
-        
-        ospf_lsa_is_self_originated(ospf,lsa);
-        zlog_debug("4");
-        lsah->checksum=ospf_lsa_checksum(lsah);
-
-        lsa->area=ospf->backbone;
+        lsa->data = ospf_lsa_data_new (lsa_length);
+        lsah = (struct lsa_header *) STREAM_DATA (s);
+        memcpy(lsa->data, STREAM_DATA (s), lsa_length);  
+        ospf_lsa_is_self_originated(ospf, lsa);
+        lsah->checksum = ospf_lsa_checksum(lsah);
+        lsa->area = ospf->backbone;
         lsa->lock=1;
-        lsa->lsdb=vty_test_db;
-        zlog_debug("5");
-
-        ospf_lsdb_add(vty_test_db,lsa);
+        lsa->lsdb = backup_lsdb;
+        ospf_lsdb_add(backup_lsdb, lsa);
         stream_free(s);
-        s=NULL;
-
-        zlog_debug("6");
+        s = NULL;
       }
     }
   
@@ -8487,8 +8527,8 @@ void change_lsdb_sub()
   struct ospf_lsdb *tmp;
 
   tmp=ospf->backbone->lsdb;
-  ospf->backbone->lsdb=vty_test_db;
-  vty_test_db=tmp;
+  ospf->backbone->lsdb=backup_lsdb;
+  backup_lsdb=tmp;
 
   //modify router_lsa_self
   struct ospf_lsa *lsa,*lsa1;
@@ -8501,21 +8541,25 @@ void change_lsdb_sub()
   db=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
   if(lsa!=NULL)
   {
-    zlog_debug("lsa->lock=%d,lsa->refresh_list=%d,lsa->retransmit_count=%d",lsa->lock,lsa->refresh_list,lsa->retransmit_counter);
+    if(MY_DEBUG)
+      zlog_debug("lsa->lock=%d,lsa->refresh_list=%d,lsa->retransmit_count=%d",lsa->lock,lsa->refresh_list,lsa->retransmit_counter);
 
     ospf_ls_retransmit_delete_nbr_area (area, lsa);
     ospf_refresher_unregister_lsa (area->ospf, lsa);
-    zlog_debug("free router lsa self success");
+    if(MY_DEBUG)
+      zlog_debug("free router lsa self success");
     for(rn=route_top(db);rn;rn=route_next(rn))
     {
-      zlog_debug("rn->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
+      if(MY_DEBUG)
+        zlog_debug("rn->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
       lsa1=(struct ospf_lsa *)rn->info;
       if(lsa1!=NULL)
       {
         //set lsa->lsdb=backbone
         lsa1->area=area;
         rl=(struct router_lsa *)lsa1->data;
-        zlog_debug("rl->adv_router:%x,ospf->router_id:%x",rl->header.adv_router.s_addr,ospf->router_id.s_addr);
+        if(MY_DEBUG)
+          zlog_debug("rl->adv_router:%x,ospf->router_id:%x",rl->header.adv_router.s_addr,ospf->router_id.s_addr);
         if(rl->header.adv_router.s_addr==ospf->router_id.s_addr)
         {
           ospf->backbone->router_lsa_self=lsa1;
@@ -8543,63 +8587,29 @@ DEFUN(load_lsdb,
 {
   struct ospf *ospf=ospf_lookup ();
 
-  struct ospf_lsa *lsa,*lsa1,*lsa_dup;
+  struct ospf_lsa *lsa1,*lsa_dup;
 
-  struct route_node *rn,*rn1;
+  struct route_node *rn1;
   struct route_table *db;
   struct ospf_area *area;
-  zlog_debug("in func load lsdb");
-  area=ospf->backbone;
-  db=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
-  if(area==NULL || db==NULL)
+  if(MY_DEBUG)
+    zlog_debug("in func load lsdb");
+  area = ospf->backbone;
+  db = ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
+  if(area == NULL || db == NULL)
   {
     return CMD_WARNING;
   }
-  /*
-  for(rn=route_top(db);rn;rn=route_next(rn))
-  {
-    zlog_debug("rn->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
-    lsa=(struct ospf_lsa *)rn->info;
-    if(lsa!=NULL)
-    {
-      zlog_debug("before clear,lsa->lock=%d,lsa->refresh_list=%d,lsa->retransmit_count=%d",lsa->lock,lsa->refresh_list,lsa->retransmit_counter);
-      for(rn1=route_top(vty_test_db->type[OSPF_ROUTER_LSA].db);rn1;rn1=route_next(rn1))
-      {
-        lsa1=(struct ospf_lsa *)rn1->info;
-        if(lsa1!=NULL)
-        {
-          if(lsa1->data->id.s_addr==lsa->data->id.s_addr)
-          {
-
-          
-            lsa_dup=ospf_lsa_dup(lsa1);
-            lsa_dup->area=area;
-            lsa_dup->lsdb=ospf->backbone->lsdb;
-            //ospf_lsdb_add(ospf->backbone->lsdb,lsa1); //old lsa will be delete here
-            ospf_lsa_install(ospf,NULL,lsa_dup);
-
-            zlog_debug("after lsa1 install 1,lsa1->data->type=%d",lsa1->data->type);
-            break;
-          }
-          zlog_debug("after lsa1 install 2");
-        }
-        zlog_debug("after lsa1 install 3");
-      }
-      zlog_debug("install a lsa success");
-    }
-  }
-  */
-  for(rn1=route_top(vty_test_db->type[OSPF_ROUTER_LSA].db);rn1;rn1=route_next(rn1))
+  for(rn1=route_top(backup_lsdb->type[OSPF_ROUTER_LSA].db);rn1;rn1=route_next(rn1))
   {
     lsa1=(struct ospf_lsa *)rn1->info;
     if(lsa1!=NULL)
     {
-
-        lsa_dup=ospf_lsa_dup(lsa1);
-        lsa_dup->area=area;
-        lsa_dup->lsdb=ospf->backbone->lsdb;
-        ospf_lsa_install(ospf,NULL,lsa_dup);
-
+      lsa_dup=ospf_lsa_dup(lsa1);
+      lsa_dup->area=area;
+      lsa_dup->lsdb=ospf->backbone->lsdb;
+      ospf_lsa_install(ospf,NULL,lsa_dup);
+      if(MY_DEBUG)
         zlog_debug("after lsa1 install 1,lsa1->data->type=%d",lsa1->data->type);
     }
   }
@@ -8618,6 +8628,7 @@ DEFUN(see_lsdb,
   struct route_node *rn;
   struct route_table *db;
   struct ospf_area *area;
+
   zlog_debug("in func see lsdb");
   area=ospf->backbone;
   db=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
@@ -8770,50 +8781,55 @@ DEFUN( print_nbr_rxmt,
   print_nbr_rxmt_sub();
   return CMD_SUCCESS;
 }
-
+// 只对于具有phase的router-lsa进行标记
+// ase不能进行标记，否则在lsu报文中传输时，checksum会出错，因而选择在计算时直接看矩阵跳过
 void spf_change_phase_sub(int phase)
 {
   //change tos according to phase_matrix;
-  struct ospf *ospf=ospf_lookup();
-  
-  struct  route_table *rt=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
-  
+  struct ospf *ospf = ospf_lookup();  
   struct route_node *rn;
   struct ospf_lsa *lsa;
-  struct router_lsa *rl;
-
-  zlog_debug("in func spf_change_phase_sub");
-
-  for(rn=route_top(rt);rn;rn=route_next(rn))
+  if(MY_DEBUG)
+    zlog_debug("in func spf_change_phase_sub, phase = %d", phase);
+  LSDB_LOOP(ROUTER_LSDB(ospf->backbone), rn, lsa)
   {
-    lsa=rn->info;
-    if(lsa==NULL)
+    struct router_lsa *rl = (struct router_lsa *)lsa->data;
+    if(MY_DEBUG)
+      zlog_debug("phase_count = %d, links_count=%d", lsa->phase_count, lsa->links_count);
+    //if lsa do't have phase, nothing will happen
+    if(lsa->phase_count != 0 && lsa->phase_matrix != NULL)
     {
-      continue;
-    }
-    else
-    {
-      rl=(struct router_lsa *)lsa->data;
-      zlog_debug("phase_count=%d,links_count=%d",lsa->phase_count,lsa->links_count);
-      //zlog_debug("before change:length=%d",rl->header.length);
-      //zlog_debug("before change:ntohs length=%d",ntohs(rl->header.length));
-      //if lsa do't have phase, nothing will happen
-      if(lsa->phase_count!=0 && lsa->phase_matrix!=NULL)
+      if(MY_DEBUG)
+        zlog_debug("rl->adv = %x, id = %x", rl->header.adv_router.s_addr, rl->header.id.s_addr);
+      for(int i = 0; i<lsa->links_count; ++i)
       {
-        for(int i=0;i<lsa->links_count;++i)
+        if(lsa->phase_matrix[i][phase] == 1)
         {
-          if(lsa->phase_matrix[i][phase]==1)
-            rl->link[i].tos=(u_char)0x01;
-          else
-            rl->link[i].tos=(u_char)0x00;
-          //zlog_debug("rl->link[%d].tos=%d",i,rl->link[i].tos);
-          //zlog_debug("rl->link[%d].type=%d",i,rl->link[i].type);
+          rl->link[i].tos = 1;
+          if(MY_DEBUG)
+            zlog_debug("rl->link[%d].tos=%d, type = %d",i,rl->link[i].tos, rl->link[i].type);
         }
+        else
+          rl->link[i].tos = 0;
       }
-      //zlog_debug("after change:length=%d",rl->header.length);
-      //zlog_debug("after change:ntohs length=%d",ntohs(rl->header.length));
     }
   }
+  if(MY_DEBUG)
+    zlog_debug("in func spf_change_phase_sub 1 #####################");
+  // LSDB_LOOP (EXTERNAL_LSDB (ospf), rn, lsa)
+  // {
+  //   struct as_external_lsa *ase = (struct as_external_lsa *)lsa->data;
+  //   if(MY_DEBUG)
+  //     zlog_debug("ase->adv = %x, id = %x, phase_count = %x", ase->header.adv_router.s_addr, ase->header.id.s_addr, lsa->phase_count);
+  //   if(lsa->phase_count != 0) {      
+  //     if(lsa->phase_matrix[0][global_phase] == 1)
+  //       ase->e[0].tos = 1;
+  //     else
+  //       ase->e[0].tos = 0;
+  //   }
+  // }
+  // if(MY_DEBUG)
+  //   zlog_debug("in func spf_change_phase_sub 2 ##################");
   ospf_spf_calculate_schedule(ospf);
 }
 
@@ -8824,9 +8840,9 @@ DEFUN( spf_change_phase,
        "spfchange to specific phase\n")
 {
 
-  int phase_1=atoi(argv[0]);
+  int phase_tmp = atoi(argv[0]);
 
-  spf_change_phase_sub(phase_1);
+  spf_change_phase_sub(phase_tmp);
 
   return CMD_SUCCESS;
 }
@@ -8839,7 +8855,8 @@ ospf_predicted_link_down_timer (struct thread *thread)
   nbr = THREAD_ARG (thread);
   nbr->t_predown = NULL;
   OSPF_NSM_EVENT_EXECUTE(nbr,NSM_PredictedLinkDown);
-  zlog_debug("predown timer has executed");
+  if(MY_DEBUG)
+    zlog_debug("predown timer has executed");
   return 0;
 }
 
@@ -8850,27 +8867,25 @@ void predicted_linkdown_sub(struct in_addr nbr_addr)
   struct listnode *node,*nnode;
   struct ospf_interface *oi;
   struct route_node *rn;
-
-  zlog_debug("in func predicted_linkdown_sub");
+  if(MY_DEBUG)
+    zlog_debug("in func predicted_linkdown_sub");
   ospf=ospf_lookup ();
   for(ALL_LIST_ELEMENTS(ospf->oiflist, node, nnode, oi))
-  {
     for(rn=route_top(oi->nbrs); rn;  rn=route_next(rn))
     {
       if((nbr=(struct ospf_neighbor *)rn->info))
       {
-        zlog_debug("in predictedlinkdown %x",nbr->router_id.s_addr);
-
+        if(MY_DEBUG)
+          zlog_debug("in predictedlinkdown %x",nbr->router_id.s_addr);
         if(nbr->router_id.s_addr == nbr_addr.s_addr)
         {
-          zlog_debug("find nbr in predictedlinkdown %x, and predown timer is on",nbr->router_id.s_addr);
+          if(MY_DEBUG)
+            zlog_debug("find nbr in predictedlinkdown %x, and predown timer is on",nbr->router_id.s_addr);
           OSPF_NSM_TIMER_ON(nbr->t_predown,ospf_predicted_link_down_timer,nbr->v_test);
           break;
         }
       }
     }
-  }
-
 }
 
 
@@ -8898,13 +8913,16 @@ void predicted_linkup_sub(struct in_addr nbr_addr)
   {
     for(rn=route_top(oi->nbrs); rn;  rn=route_next(rn))
     {
-      zlog_debug("nbr->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
+      if(MY_DEBUG)
+        zlog_debug("nbr->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
       if((nbr=(struct ospf_neighbor *)rn->info))
       {
-        zlog_debug("in predictedlinkup %x",nbr->router_id.s_addr);
+        if(MY_DEBUG)
+          zlog_debug("in predictedlinkup %x",nbr->router_id.s_addr);
         if(nbr->router_id.s_addr == nbr_addr.s_addr)
         {
-          zlog_debug("find nbr in predictedlinkup %x",nbr->router_id.s_addr);
+          if(MY_DEBUG)
+            zlog_debug("find nbr in predictedlinkup %x",nbr->router_id.s_addr);
           OSPF_NSM_EVENT_EXECUTE (nbr, NSM_PredictedLinkUp);
         }
       }
@@ -8940,8 +8958,7 @@ DEFUN(spf_test,
 
 
 
-struct neighbor_info_list *neighbor_info_list_cur;
-struct ase_info_list *ase_info_list_cur;
+
 
 
 struct neighbor_info *neighbor_info_new(void)
@@ -8985,6 +9002,7 @@ void neighbor_info_list_free(struct neighbor_info_list *neighborinfolist)
 
 static void print_nbr_info_list()
 {
+
   zlog_debug("begin print nbr info list");
   zlog_debug("neighbor:%d,phase:%d",neighbor_info_list_cur->neighborcount,neighbor_info_list_cur->phasecount);
   struct listnode *node, *nnode;
@@ -9004,7 +9022,7 @@ static void print_nbr_info_list()
 void read_neighbor_info(const char *filename)
 {
   DATA_INFO_STR nbr_str;
-  fileToMatrix_str(filename, & nbr_str);
+  fileToMatrix_str(filename, &nbr_str);
   int i,j,nbr_count,phase_count;
   struct neighbor_info *nbr_info;
 
@@ -9017,7 +9035,8 @@ void read_neighbor_info(const char *filename)
 
   for(i=1;i<nbr_count+1;++i)
   {
-    zlog_debug("in read neighbor info,%s",nbr_str.matrix[i][0]);
+    if(MY_DEBUG)
+      zlog_debug("in read neighbor info,%s",nbr_str.matrix[i][0]);
 
     nbr_info=neighbor_info_new();
     inet_aton(nbr_str.matrix[i][0], &nbr_info->router_id);
@@ -9033,8 +9052,8 @@ void read_neighbor_info(const char *filename)
     listnode_add(neighbor_info_list_cur->n_list,nbr_info);
 
   }
-
-  print_nbr_info_list();
+  if(MY_DEBUG)
+    print_nbr_info_list();
 
 }
 
@@ -9057,66 +9076,6 @@ DEFUN(print_neighbor,
   return CMD_SUCCESS;
 }
 
-
-
-static int
-ospf_test_timer (struct thread *thread)
-{
-  struct ospf_neighbor *nbr;
-
-  nbr = THREAD_ARG (thread);
-  nbr->t_test = NULL;
-
-  struct timeval help_time;
-  quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
-
-  zlog_debug ("TEST[%s:%s]: test_timer end at %ld.%ld", IF_NAME (nbr->oi), inet_ntoa (nbr->router_id),help_time.tv_sec,help_time.tv_usec);
-
-
-  return 0;
-}
-
-
-DEFUN(test_timer,
-      test_timer_cmd,
-      "test_timer A.B.C.D <1-100>",
-      "test timer func\n")
-{
-  struct in_addr nbr_addr;
-  VTY_GET_IPV4_ADDRESS ("neighbor address", nbr_addr, argv[0]);
-  u_int32_t v_test;
-  v_test=(u_int32_t)atoi(argv[1]);
-
-  struct ospf_neighbor *nbr;
-  struct ospf *ospf;
-  struct listnode *node,*nnode;
-  struct ospf_interface *oi;
-  struct route_node *rn;
-  struct timeval help_time;
-
-  ospf=ospf_lookup ();
-  for(ALL_LIST_ELEMENTS(ospf->oiflist, node, nnode, oi))
-  {
-    for(rn=route_top(oi->nbrs); rn;  rn=route_next(rn))
-    {
-      if((nbr=(struct ospf_neighbor *)rn->info))
-      {
-
-        if(nbr->router_id.s_addr == nbr_addr.s_addr)
-        {
-          quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
-          zlog_debug("in timer_test %x,test_timer begin at %ld.%ld",nbr->router_id.s_addr,help_time.tv_sec,help_time.tv_usec);
-          
-          OSPF_NSM_TIMER_ON(nbr->t_test,ospf_test_timer,v_test);
-        }
-      }
-    }
-  }
-
-  return CMD_SUCCESS;
-}
-
-
 int
 ospf_predicted_link_up_timer (struct thread *thread)
 {
@@ -9126,8 +9085,6 @@ ospf_predicted_link_up_timer (struct thread *thread)
   nbr->t_test = NULL;
 
   OSPF_NSM_EVENT_EXECUTE(nbr,NSM_PredictedLinkUp);
-
-
   return 0;
 }
 
@@ -9140,7 +9097,7 @@ void begin_testing_sub(struct in_addr nbr_addr,u_int32_t v_test)
   struct route_node *rn;
   struct timeval help_time;
 
-  ospf=ospf_lookup ();
+  ospf = ospf_lookup ();
   for(ALL_LIST_ELEMENTS(ospf->oiflist, node, nnode, oi))
   {
     for(rn=route_top(oi->nbrs); rn;  rn=route_next(rn))
@@ -9151,13 +9108,12 @@ void begin_testing_sub(struct in_addr nbr_addr,u_int32_t v_test)
         if(nbr->router_id.s_addr == nbr_addr.s_addr)
         {
           quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
-          zlog_debug("in begin_testing %x,ospf_predicted_link_up_timer begin at %ld.%ld",nbr->router_id.s_addr,help_time.tv_sec,help_time.tv_usec);
-          if(v_test!=0)
-          {
-            nbr->v_test=v_test;
-          }
-          OSPF_NSM_EVENT_EXECUTE(nbr,NSM_BeginTesting);
-          OSPF_NSM_TIMER_ON(nbr->t_test,ospf_predicted_link_up_timer,nbr->v_test);
+          if(MY_DEBUG)
+            zlog_debug("in begin_testing %x,ospf_predicted_link_up_timer begin at %ld.%ld",nbr->router_id.s_addr,help_time.tv_sec,help_time.tv_usec);
+          if(v_test == 0)
+            v_test = nbr->v_test;
+          OSPF_NSM_EVENT_EXECUTE(nbr, NSM_BeginTesting);
+          OSPF_NSM_TIMER_ON(nbr->t_test, ospf_predicted_link_up_timer, v_test);
         }
       }
     }
@@ -9185,45 +9141,54 @@ DEFUN(set_phase_all,
      "set phase_all <1-1000>\n")
 {
   phase_all=atoi(argv[0]);
-  zlog_debug("in func set_phase_all, phase_all=%d",phase_all);
+  if(MY_DEBUG)
+    zlog_debug("in func set_phase_all, phase_all=%d",phase_all);
   return CMD_SUCCESS;
 } 
 //return 0 if lsa is recover, otherwise return 1
-static int is_lsa_recover(struct ospf_lsa *lsa,struct ospf_lsa *lsa_phase,int phase)
+static int is_router_lsa_recover(struct ospf_lsa *lsa, struct ospf_lsa *lsa_phase, int phase)
 {
-  assert(lsa->phase_count==0);
-  assert(lsa_phase->phase_count!=0);
-  struct router_lsa *rl=(struct router_lsa *)lsa->data;
+  assert(lsa->phase_count == 0);
+  assert(lsa_phase->phase_count != 0);
+  struct router_lsa *rl = (struct router_lsa *)lsa->data;
+  struct router_lsa *rl_back = (struct router_lsa *)lsa_phase->data;
   //struct router_lsa *rl_phase=lsa_phase->data;
-  int link_to_check=0;
+  int link_preset = 0, link_curr = 0;
   //get links_to_check number from phase_matrix 
-  for(int i=0;i<lsa_phase->links_count;++i)
+  for(int i = 0; i < lsa_phase->links_count; ++i)
   {
-    if(lsa_phase->phase_matrix[i][phase]==0)
+    if(lsa_phase->phase_matrix[i][phase] == 0)
     {
-      zlog_debug("in func is_lsa_recover, this is a link to check");
-      link_to_check++;
+      if(MY_DEBUG)
+        zlog_debug("in func is_router_lsa_recover, this is a link to check, rl_back->id = %x, data = %x", rl_back->link[i].link_id.s_addr, rl_back->link[i].link_data.s_addr);
+      link_preset++;
+      for(int j = 0; j < ntohs(rl->links); ++j)
+      {
+        if(rl->link[j].link_data.s_addr == rl_back->link[i].link_data.s_addr &&  \
+           rl->link[j].link_id.s_addr == rl_back->link[i].link_id.s_addr && \
+           rl->link[j].type == rl_back->link[i].type)
+        {
+          if(MY_DEBUG)
+            zlog_debug("match link in curr lsa, lsa->id = %x, data = %x", rl->link[j].link_id.s_addr, rl->link[j].link_data.s_addr);
+          link_curr++;
+          break;
+        }
+      }
     }
+  }
 
-  }
-  //check links in lsa
-  //roughly consider links same equal lsa same,don't consider cases that links different but count same
-  int link_in_lsa_receive=(int)ntohs(rl->links);
-  zlog_debug("in func is_lsa_recover,links1=%d,links2=%d",link_to_check,link_in_lsa_receive);
-  if(link_in_lsa_receive==link_to_check)
-  {
+  if(MY_DEBUG)
+    zlog_debug("in func is_router_lsa_recover,link_preset = %d, link_curr = %d", link_preset, link_curr);
+  if(link_curr >= link_preset)
     return 0;
-  }
   else
-  {
     return 1;
-  }
 }
 
-DEFUN(test_is_lsa_recover,
-      test_is_lsa_recover_cmd,
-      "test_is_lsa_recover <1-1000>",
-      "test is_lsa_recover <1-1000(phase)>\n")
+DEFUN(test_is_router_lsa_recover,
+      test_is_router_lsa_recover_cmd,
+      "test_is_router_lsa_recover <1-1000>",
+      "test is_router_lsa_recover <1-1000(phase)>\n")
 
 {
   struct ospf *ospf=ospf_lookup ();
@@ -9233,7 +9198,7 @@ DEFUN(test_is_lsa_recover,
   struct route_node *rn,*rn1;
   struct route_table *db;
   struct ospf_area *area;
-  zlog_debug("in func test_is_lsa_recover");
+  zlog_debug("in func test_is_router_lsa_recover");
   area=ospf->backbone;
   db=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
 
@@ -9256,7 +9221,7 @@ DEFUN(test_is_lsa_recover,
         zlog_debug("this lsa has phase,continue");
         continue;
       }
-      for(rn1=route_top(vty_test_db->type[OSPF_ROUTER_LSA].db);rn1;rn1=route_next(rn1))
+      for(rn1=route_top(backup_lsdb->type[OSPF_ROUTER_LSA].db);rn1;rn1=route_next(rn1))
       {
         lsa1=(struct ospf_lsa *)rn1->info;
         if(lsa1!=NULL)
@@ -9264,7 +9229,7 @@ DEFUN(test_is_lsa_recover,
 
           if(lsa1->data->id.s_addr==lsa->data->id.s_addr)
           {
-            test_result=is_lsa_recover(lsa,lsa1,test_phase);
+            test_result=is_router_lsa_recover(lsa,lsa1,test_phase);
             zlog_debug("test_result=%d",test_result);
           }
         }
@@ -9361,7 +9326,7 @@ DEFUN(print_phase,
       "print_phase",
       "print phase info\n")
 {
-  zlog_debug("in func print phase,phase_all=%d,global_phase=%d",phase_all,global_phase);
+  zlog_debug("in func print phase, phase_all = %d, global_phase = %d",phase_all,global_phase);
   return CMD_SUCCESS;
 }
 
@@ -9431,152 +9396,148 @@ DEFUN(ase_input,
   {
     return CMD_WARNING;
   }
-  zlog_debug("in func ase_input");
+  if(MY_DEBUG)
+    zlog_debug("in func ase_input");
   int i,j,lsa_length;
-  struct ospf_lsa *lsa;
-  struct stream *s=NULL;
+  struct ospf_lsa *lsa = NULL;
+  struct stream *s = NULL;
   struct lsa_header *lsah;
   struct in_addr temp_addr;
   struct route_node *rn;
   struct ospf *ospf=ospf_lookup ();
   lsa_length=OSPF_LSA_HEADER_SIZE+16;
-
-  zlog_debug("begin reading ase lsdb,row_total=%d",data_info_str.row_total);
+  if(MY_DEBUG)
+    zlog_debug("begin reading ase lsdb,row_total=%d",data_info_str.row_total);
   
   for(i=0;i<data_info_str.row_total;++i)
   {
-    zlog_debug("data_info_str.matrix[%d][0]=%s",i,data_info_str.matrix[i][0]);
-    if(data_info_str.matrix[i][0][0]=='!')
+    if(MY_DEBUG)
+      zlog_debug("data_info_str.matrix[%d][0]=%s",i,data_info_str.matrix[i][0]);
+    if(data_info_str.matrix[i][0][0] == '!')
     {
-      zlog_debug("in line begin with !");
-      s=stream_new (OSPF_MAX_LSA_SIZE);
-      lsa=ospf_lsa_new();
-      zlog_debug("0.1");
-      lsah=(struct lsa_header *) STREAM_DATA (s);
-      zlog_debug("0.2");
-      lsah->ls_age=htons (OSPF_LSA_INITIAL_AGE);
-      zlog_debug("0.3");
-      lsah->options=(u_char) atoi (data_info_str.matrix[i][2]);
-      zlog_debug("0.4");
-      lsah->type=(u_char)atoi (data_info_str.matrix[i][3]);
-      zlog_debug("1");
-      inet_aton(data_info_str.matrix[i][4],&temp_addr);
-      lsah->id.s_addr=temp_addr.s_addr;
-      zlog_debug("2");
-      inet_aton(data_info_str.matrix[i][5],&temp_addr);
-      lsah->adv_router.s_addr=temp_addr.s_addr;
-      zlog_debug("3");
-      lsah->ls_seqnum=htonl(atoi(data_info_str.matrix[i][6])+1);
-      zlog_debug("4");
+      //zlog_debug("in line begin with !");
+      s = stream_new (OSPF_MAX_LSA_SIZE);
+      lsa = ospf_lsa_new();
+      //zlog_debug("0.1");
+      lsah = (struct lsa_header *) STREAM_DATA (s);
+      //zlog_debug("0.2");
+      lsah->ls_age = htons (OSPF_LSA_INITIAL_AGE);
+      //zlog_debug("0.3");
+      lsah->options = (u_char) atoi (data_info_str.matrix[i][2]);
+      //zlog_debug("0.4");
+      lsah->type = (u_char)atoi (data_info_str.matrix[i][3]);
+      //zlog_debug("1");
+      inet_aton(data_info_str.matrix[i][4], &temp_addr);
+      lsah->id.s_addr = temp_addr.s_addr;
+      //zlog_debug("2");
+      inet_aton(data_info_str.matrix[i][5], &temp_addr);
+      lsah->adv_router.s_addr = temp_addr.s_addr;
+      //zlog_debug("3");
+      lsah->ls_seqnum = htonl(atoi(data_info_str.matrix[i][6]) + 1);
+      //zlog_debug("4");
       //lsah->checksum will calc in the end, because seqnum will change
       
-      lsah->length=htons(atoi(data_info_str.matrix[i][8]));
-      zlog_debug("5");
+      lsah->length = htons(atoi(data_info_str.matrix[i][8]));
+      //zlog_debug("5");
       stream_forward_endp (s, OSPF_LSA_HEADER_SIZE); 
       
-
-      zlog_debug("lsa header write successful");
+      if(MY_DEBUG)
+        zlog_debug("lsa header write successful");
     }
 
-    else if(data_info_str.matrix[i][0][0]=='@')
+    else if(data_info_str.matrix[i][0][0] == '@')
     {
-      zlog_debug("in line begin with @");
-      inet_aton(data_info_str.matrix[i][1],&temp_addr);
-      stream_putl(s,htonl(temp_addr.s_addr));
-      stream_putc (s,atoi(data_info_str.matrix[i][2]));
-      stream_putc (s,atoi(data_info_str.matrix[i][3]));
-      stream_putc (s,atoi(data_info_str.matrix[i][4]));
-      stream_putc (s,atoi(data_info_str.matrix[i][5]));
-      inet_aton(data_info_str.matrix[i][6],&temp_addr);
-      stream_putl(s,htonl(temp_addr.s_addr));
-      stream_putl(s,htonl ( atoi( data_info_str.matrix[i][7]) ) );
+      if(MY_DEBUG)
+        zlog_debug("in line begin with @");
+      inet_aton(data_info_str.matrix[i][1], &temp_addr);
+      stream_putl(s, htonl(temp_addr.s_addr));
+      stream_putc (s, atoi(data_info_str.matrix[i][2]));
+      stream_putc (s, atoi(data_info_str.matrix[i][3]));
+      stream_putc (s, atoi(data_info_str.matrix[i][4]));
+      stream_putc (s, atoi(data_info_str.matrix[i][5]));
+      inet_aton(data_info_str.matrix[i][6], &temp_addr);
+      stream_putl(s, htonl(temp_addr.s_addr));
+      stream_putl(s, htonl(atoi(data_info_str.matrix[i][7])) );
       
-      lsa->data=ospf_lsa_data_new (lsa_length);
-      lsah=(struct lsa_header *) STREAM_DATA (s);
-      memcpy(lsa->data,STREAM_DATA (s),lsa_length);
+      lsa->data = ospf_lsa_data_new (lsa_length);
+      lsah = (struct lsa_header *) STREAM_DATA (s);
+      memcpy(lsa->data, STREAM_DATA (s), lsa_length);
 
-      ospf_lsa_is_self_originated(ospf,lsa);
-      lsah->checksum=ospf_lsa_checksum(lsah);
+      ospf_lsa_is_self_originated(ospf, lsa);
+      lsah->checksum = ospf_lsa_checksum(lsah);
 
-      lsa->lock=1;
-      lsa->lsdb=vty_test_db;
+      //lsa->lock=1;
+      lsa->lsdb = backup_lsdb;
 
     }
     else if(data_info_str.matrix[i][0][0]=='#')
     {
-      zlog_debug("in line begin with #");
+      if(MY_DEBUG)
+        zlog_debug("in line begin with #");
 
       lsa->links_count=1;
       lsa->phase_count=atoi(data_info_str.matrix[i][1]);
-
-      zlog_debug("lsa->phase_count=%d",lsa->phase_count);
+      if(MY_DEBUG)
+        zlog_debug("lsa->phase_count=%d",lsa->phase_count);
 
       lsa->phase_matrix=(int **)calloc(1,sizeof(int *));
       lsa->phase_matrix[0]=(int *)calloc(lsa->phase_count,sizeof(int ));
       for(j=2;j<lsa->phase_count+2;++j)
       {
         lsa->phase_matrix[0][j-2]=atoi(data_info_str.matrix[i][j]);
-        zlog_debug("lsa->phase_mat[0][%d]=%d",j-2,lsa->phase_matrix[0][j-2]);
+        if(MY_DEBUG)
+          zlog_debug("lsa->phase_mat[0][%d]=%d",j-2,lsa->phase_matrix[0][j-2]);
       }
 
-      ospf_lsdb_add(vty_test_db,lsa);
+      ospf_lsdb_add(backup_lsdb,lsa);
       stream_free(s);
-      s=NULL;
+      s = NULL;
     }
-
-
   }
-  ase_info_list_cur->adv_router_count=0;
-  ase_info_list_cur->ase_list=list_new();
+  // 把所有星间的外部OA的预置ase都加入一个列表，便于管理
+  ase_info_list_cur->adv_router_count = 0;
+  ase_info_list_cur->ase_list = list_new();
   struct listnode *node, *nnode;
   struct as_external_lsa *ase;
   struct ase_info *ase_info;
   int find_flag=0;
 
   struct prefix *p;
-  p=prefix_new();
-
-  for(rn=route_top(vty_test_db->type[OSPF_AS_EXTERNAL_LSA].db);rn;rn=route_next(rn))
+  p = prefix_new();
+  for(rn=route_top(backup_lsdb->type[OSPF_AS_EXTERNAL_LSA].db);rn;rn=route_next(rn))
   {
     find_flag=0;
     if(rn->info!=NULL)
-    {
-      
+    {     
       lsa=(struct ospf_lsa *)rn->info;
-      ase=(struct as_external_lsa *)lsa->data; 
-      
+      ase=(struct as_external_lsa *)lsa->data;       
       p->u.prefix4.s_addr=ase->header.id.s_addr;
       p->prefixlen=ip_masklen(ase->mask);
-      if(prefix_match(se_prefix,p))
+      if(prefix_match(se_prefix, p))
       {
-        zlog_debug("in ase_input,add ase_list,ase->id=%x/%d,pass",ase->header.id.s_addr,p->prefixlen);
+        if(MY_DEBUG)
+          zlog_debug("in ase_input,add ase_list,ase->id=%x/%d,pass",ase->header.id.s_addr,p->prefixlen);
         continue;
       }
-
       for(ALL_LIST_ELEMENTS(ase_info_list_cur->ase_list,node,nnode,ase_info))
       {
         if(ase_info->adv_router.s_addr==ase->header.adv_router.s_addr)
         {
-          find_flag=1;
+          find_flag = 1;
           listnode_add(ase_info->ase_lsa,lsa);
           ase_info->lsa_count++;  
         }
       }
-
       if(find_flag==0)
       {
-        
         ase_info=calloc(1,sizeof(struct ase_info));
-        
         ase_info->adv_router.s_addr=ase->header.adv_router.s_addr;
         ase_info->lsa_count=1;
         ase_info->ase_lsa=list_new();
         listnode_add(ase_info->ase_lsa,lsa);
-
-        listnode_add(ase_info_list_cur->ase_list,ase_info);
+        listnode_add(ase_info_list_cur->ase_list, ase_info);
         ase_info_list_cur->adv_router_count++;
       }
-
     }
   }
 
@@ -9592,10 +9553,11 @@ DEFUN(ase_changelsdb,
   struct ospf_lsdb *tmp;
 
   tmp=ospf->lsdb;
-  ospf->lsdb=vty_test_db;
-  vty_test_db=tmp;
+  ospf->lsdb=backup_lsdb;
+  backup_lsdb=tmp;
   return CMD_SUCCESS;
 }
+
 DEFUN(ase_loadlsdb,
       ase_loadlsdb_cmd,
       "ase_loadlsdb",
@@ -9605,25 +9567,26 @@ DEFUN(ase_loadlsdb,
   struct ospf_lsa *lsa,*lsa_dup;
   struct route_node *rn;
   struct route_table *db;
-  zlog_debug("in func ase_loadlsdb");
-  db=vty_test_db->type[OSPF_AS_EXTERNAL_LSA].db;
-  if(db==NULL)
+  if(MY_DEBUG)
+    zlog_debug("in func ase_loadlsdb");
+  db = backup_lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
+  if(db == NULL)
   {
     return CMD_WARNING;
   }
-  for(rn=route_top(db);rn;rn=route_next(rn))
+  for(rn = route_top(db); rn; rn = route_next(rn))
   {
-    if((lsa=(struct ospf_lsa*)rn->info)!=NULL)
+    if((lsa = (struct ospf_lsa*)rn->info) != NULL)
     {
-      lsa_dup=ospf_lsa_dup(lsa);
-      lsa_dup->lsdb=ospf->lsdb;
-      lsa_dup->area=NULL;
-      ospf_lsa_install(ospf,NULL,lsa_dup);
+      lsa_dup = ospf_lsa_dup(lsa);
+      lsa_dup->lsdb = ospf->lsdb;
+      lsa_dup->area = NULL;
+      ospf_lsa_install(ospf, NULL, lsa_dup);
     }
   }
-
   return CMD_SUCCESS;
 }
+
 DEFUN(print_ase_info,
       print_ase_info_cmd,
       "print_ase_info",
@@ -9634,7 +9597,6 @@ DEFUN(print_ase_info,
   struct ospf_lsa *lsa;
 
   struct ase_info *ase_info;
-
   zlog_debug("in func print_ase_info,ase->adv_router_cnt=%d",ase_info_list_cur->adv_router_count);
 
   for(ALL_LIST_ELEMENTS(ase_info_list_cur->ase_list,node,nnode,ase_info))
@@ -9648,193 +9610,155 @@ DEFUN(print_ase_info,
 
   return CMD_SUCCESS;
 }
-//return 1 if lsa dont recover or dont change,else return 0,and should load lsa
-static int is_ase_recover(struct in_addr adv_addr,int phase)
+
+// 返回值 0 可以重新加载
+// 返回值 1 没有变化
+// 返回值 2 不能重新加载
+// 只要判断对应的 se_ase_info->enable 的值，如果为enable说明边界已经可用，恢复原来的LSA，否则保持现有状况
+static int is_ase_recover(struct in_addr adv_addr)
 {
-  struct ospf *ospf=ospf_lookup();
-  struct route_table *rt;
+  struct ospf *ospf = ospf_lookup();
   struct route_node *rn;
   struct ospf_lsa *lsa;
   struct as_external_lsa *ase;
-  int ase_count=0;
-  int phase_ase_count=0;
-  struct listnode *node,*nnode,*node1,*nnode1;
+  struct listnode *node, *nnode;
   struct ase_info *ase_info;
-  rt=ospf->lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
-
-  int change_flag=0;
-  for(rn=route_top(rt);rn;rn=route_next(rn))
-  {
-    if(rn->info!=NULL)
-    {
-      lsa=(struct ospf_lsa *)rn->info;
-      ase=(struct as_external_lsa *)lsa->data;
-      if(ase->header.adv_router.s_addr==adv_addr.s_addr && lsa->phase_count==0)
-      {
-        change_flag=1;
-        break;
-      }      
-    }
-  }
-
-
-
-  for(rn=route_top(rt);rn;rn=route_next(rn))
-  {
-    if(rn->info!=NULL)
-    {
-      lsa=(struct ospf_lsa *)rn->info;
-      ase=(struct as_external_lsa *)lsa->data;
-      if(ase->header.ls_age < OSPF_LSA_MAXAGE && ase->header.adv_router.s_addr==adv_addr.s_addr)
-      {
-
-        ase_count++;
-      }
-    }
-  }
-
+  struct se_ase_info *se_ase_info;
+  // return 1 if lsa dont change
+  int phase_lsa_curr_count = 0;
+  int phase_lsa_preset_count = 0;
   for(ALL_LIST_ELEMENTS(ase_info_list_cur->ase_list,node,nnode,ase_info))
   {
-    if(ase_info->adv_router.s_addr==adv_addr.s_addr)
+    if(ase_info->adv_router.s_addr == adv_addr.s_addr)
     {
-      for(ALL_LIST_ELEMENTS(ase_info->ase_lsa,node1,nnode1,lsa))
-      {
-
-        if(lsa->phase_matrix[0][phase]==0)
-        {
-          phase_ase_count++;
-        }
-      }
+      phase_lsa_preset_count = ase_info->lsa_count;
       break;
     }
   }
-  zlog_debug("phase=%d,phase_ase_count=%d,ase_count=%d",phase,phase_ase_count,ase_count);
-  if(phase_ase_count<=ase_count && change_flag==1)
+  LSDB_LOOP(EXTERNAL_LSDB(ospf), rn, lsa)
   {
-    zlog_debug("in func is_ase_recover adv_addr=%x has recover",adv_addr.s_addr);
-
-    return 0;
+    ase = (struct as_external_lsa *) lsa->data;
+    struct prefix p;
+    p.u.prefix4.s_addr = ase->header.id.s_addr;
+    p.prefixlen = ip_masklen(ase->mask);
+    if(ase->header.adv_router.s_addr == adv_addr.s_addr && lsa->phase_count != 0 && !prefix_match(se_prefix, &p))
+    {
+      phase_lsa_curr_count++;
+    }
   }
-  else
+  if(phase_lsa_curr_count >= phase_lsa_preset_count)
   {
-    zlog_debug("in func is_ase_recover adv_addr=%x hasn't recover or don't change",adv_addr.s_addr);
+    if(MY_DEBUG)
+      zlog_debug("in func is_ase_recover, adv = %x, don't change, preset %d, now %d", adv_addr.s_addr, phase_lsa_preset_count, phase_lsa_curr_count);
     return 1;
   }
-
-
+  // judge border is recover? recover then return 1, else return 0
+  for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node,nnode, se_ase_info))
+  {
+    if(se_ase_info->router_id.s_addr == adv_addr.s_addr && se_ase_info->enable == BOADER_ENABLE)
+    {
+      if(MY_DEBUG)
+        zlog_debug("in func is_ase_recover, adv = %x, has recovered", adv_addr.s_addr);
+      return 0;
+    }
+  }
+  if(MY_DEBUG)
+    zlog_debug("in func is_ase_recover, adv = %x, has not recovered", adv_addr.s_addr);
+  return 2;
 }
 
-static void manage_ase(int phase)
+// 此处只对于星间的ase进行管理, 星地相关的路由信息在load_se_ase的时候已经被加载进来了
+// 本实现中，se_ase始终都没有在LSU报文中进行传输，只是根据邻居状态机的变化进行修改，因而始终都是带有时隙信息的，无需进行整理
+static void manage_ase()
 {
-  struct listnode *node,*nnode,*node1,*nnode1;
+  struct listnode *node, *nnode, *node1, *nnode1;
   struct ase_info *ase_info;
   struct ospf_lsa *lsa,*lsa_dup;
   int test_result;
-  struct ospf *ospf=ospf_lookup();
-  for(ALL_LIST_ELEMENTS(ase_info_list_cur->ase_list,node,nnode,ase_info))
+  struct ospf *ospf = ospf_lookup();
+  for(ALL_LIST_ELEMENTS(ase_info_list_cur->ase_list, node, nnode, ase_info))
   {
-
-    test_result=is_ase_recover(ase_info->adv_router,phase);
-    if(test_result==1)
+    test_result = is_ase_recover(ase_info->adv_router);
+    if(test_result == 1)
     {
-      //do not recover or dont change, do noting
+      // don't change
       continue;
     }
-    else
+    else if(test_result == 0)
     {
       //has recover, dup ase_phase_lsa into lsdb
-      for(ALL_LIST_ELEMENTS(ase_info->ase_lsa,node1,nnode1,lsa))
+      for(ALL_LIST_ELEMENTS(ase_info->ase_lsa, node1, nnode1, lsa))
       {
-        lsa_dup=ospf_lsa_dup(lsa);
-        lsa_dup->lsdb=ospf->lsdb;
-        lsa_dup->area=NULL;
+        lsa_dup = ospf_lsa_dup(lsa);
+        lsa_dup->lsdb = ospf->lsdb;
+        lsa_dup->area = NULL;
+        lsa_dup->data->ls_seqnum = lsa->data->ls_seqnum;
         ospf_lsa_install(ospf,NULL,lsa_dup);
-
       }
+    }
+    else // result == 2, need tag  (如果由于网络延迟等原因，没有恢复到指定数量，需要打上标签)
+    {    // 一般情况下不会出现这种情况, 暂时不进行处理
+        continue;
     }
   }
 }
 
 DEFUN(test_manage_ase,
       test_manage_ase_cmd,
-      "test_manage_ase <0-100>",
+      "test_manage_ase",
       "test manage_ase func\n")
 {
-  int phase=atoi(argv[0]);
-  zlog_debug("in func test_manage_ase, phase=%d",phase);
-  manage_ase(phase);
+  manage_ase();
   return CMD_SUCCESS;
 }
 
-int last_phase;
-
-
-//lsa should be manage before spf calc
+//lsa should be manage before spf calc  
+//ospf_spf_help_timer 执行时， global_phase已经发生了修改
 static int
 ospf_spf_help_timer (struct thread *thread)
 {
   struct ospf *ospf;
-
+  if(MY_DEBUG)
+    zlog_debug("in ospf_spf_help_timer, global_phase = %d, next_phase = %d, last_phase = %d", global_phase, next_phase_tmp, last_phase);
   ospf = THREAD_ARG (thread);
-  ospf->t_spf_help=NULL;
-
-  struct timeval help_time;
-
+  ospf->t_spf_help = NULL;
   spf_change_phase_sub(global_phase);
-  quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
-  zlog_debug("in func ospf_spf_help_timer,end time at %ld.%ld",help_time.tv_sec,help_time.tv_usec);
   return 0;
 }
 
-
-DEFUN(add_phase,
-      add_phase_cmd,
-      "add_phase",
-      "add phase in cycle\n")
+static int manage_router_lsa()
 {
-  last_phase=global_phase;
-  global_phase++;
-  if(global_phase==phase_all)
-  {
-    global_phase=0;
-  }
-
-  struct ospf *ospf=ospf_lookup ();
-  //struct ospf_lsdb *tmp;
+  struct ospf *ospf = ospf_lookup ();
   struct ospf_lsa *lsa,*lsa1,*lsa_dup;
-  //struct router_lsa *rl;
   struct route_node *rn,*rn1;
   struct route_table *db;
   struct ospf_area *area;
-
-  struct timeval help_time;
-  quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
-
-  zlog_debug("in func add phase,now phase=%d,begin time at %ld.%ld",global_phase,help_time.tv_sec,help_time.tv_usec);
-  area=ospf->backbone;
-  db=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
-  if(area==NULL || db==NULL)
+  area = ospf->backbone;
+  db = ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
+  if(area == NULL || db == NULL)
   {
-    return CMD_WARNING;
+    return 0;
   }
-  //manage database
-  for(rn=route_top(db);rn;rn=route_next(rn))
+  
+  for(rn = route_top(db); rn; rn = route_next(rn))
   {
-    zlog_debug("rn->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
-    lsa=(struct ospf_lsa *)rn->info;
-    if(lsa!=NULL)
+    if(MY_DEBUG)
+      zlog_debug("rn->id=%x,prefixlen=%d",rn->p.u.prefix4.s_addr,rn->p.prefixlen);
+    lsa = (struct ospf_lsa *)rn->info;
+    if(lsa != NULL)
     {
       lsa1=NULL;
-      if(lsa->phase_count!=0)
+      if(lsa->phase_count != 0)
       {
-        zlog_debug("this lsa has phase,continue");
+        if(MY_DEBUG)
+          zlog_debug("this lsa has phase,continue");
         continue;
       }
       //look for corespoding lsa store in vty_test_lsdb
-      for(rn1=route_top(vty_test_db->type[OSPF_ROUTER_LSA].db);rn1;rn1=route_next(rn1))
+      for(rn1 = route_top(backup_lsdb->type[OSPF_ROUTER_LSA].db); rn1; rn1=route_next(rn1))
       {
-        lsa1=(struct ospf_lsa *)rn1->info;
-        if(lsa1!=NULL)
+        lsa1 = (struct ospf_lsa *)rn1->info;
+        if(lsa1 != NULL)
         {
           if(lsa1->data->id.s_addr==lsa->data->id.s_addr)
           {
@@ -9842,147 +9766,256 @@ DEFUN(add_phase,
           }
         }
       }
-      if(lsa1!=NULL)
+      if(lsa1 != NULL)
       {
         //compare with last_phase, not next phase
-        if(is_lsa_recover(lsa,lsa1,last_phase)==1)
+        if(is_router_lsa_recover(lsa, lsa1, last_phase) == 1)
         {
-          zlog_debug("this lsa don't recover, retain in lsdb");
-          continue;
+          if(MY_DEBUG)
+            zlog_debug("this lsa don't recover, retain in lsdb");
+#define LSA_TOS_TAG
+#ifdef LSA_TOS_TAG
+          // tag the links in this lsa
+          struct router_lsa *rl = (struct router_lsa *) lsa->data;
+          struct router_lsa *rl_back = (struct router_lsa *) lsa1->data;
+          int lsa_phase = -1;
+          for(int i = ntohs(rl->links); i >= 0; i--)
+          {
+            if(rl->link[i].type == LSA_LINK_TYPE_INFO)
+            {
+              if(MY_DEBUG)
+                zlog_debug("i = %d", i);
+              lsa_phase = (rl->link[i].link_id.s_addr >> 16) & 0xff;
+              if(lsa_phase == next_phase_tmp)
+                continue; 
+            }
+          }
+          if(MY_DEBUG)
+            zlog_debug("this lsa don't recover, retain in lsdb 1");          
+          for(int i = 0; i < ntohs(rl->links); ++i)
+          {
+            if(rl->link[i].type == LSA_LINK_TYPE_POINTOPOINT)
+              for(int j = 0; j < ntohs(rl_back->links); ++j)
+              {
+                if(MY_DEBUG)
+                  zlog_debug("i = %d, j = %d", i, j);
+                if(rl->link[j].type == LSA_LINK_TYPE_POINTOPOINT && rl_back->link[j].link_data.s_addr == rl->link[i].link_data.s_addr && rl_back->link[j].link_id.s_addr == rl->link[i].link_id.s_addr)
+                {
+                  if(lsa1->phase_count != 0 && lsa1->phase_matrix[j][next_phase_tmp] == 1)
+                  {
+                    rl->link[i].tos = 1;
+                    if(MY_DEBUG)
+                      zlog_debug("rl->link[%d].tos = %d", i, rl->link[i].tos);
+                  }
+                  else
+                  {
+                    rl->link[i].tos = 0;
+                    if(MY_DEBUG)
+                      zlog_debug("rl->link[%d].tos = %d", i, rl->link[i].tos);
+                  }
+                  break;
+                }
+              }
+          }
+          if(MY_DEBUG)
+            zlog_debug("this lsa don't recover, retain in lsdb 2"); 
+#endif 
         }
-        //this lsa has recover, substitute with phase lsa
-        lsa_dup=ospf_lsa_dup(lsa1);
-        lsa_dup->area=area;
-        lsa_dup->lsdb=ospf->backbone->lsdb;
-        ospf_lsa_install(ospf,NULL,lsa_dup);
+        else
+        {
+          //this lsa has recover, substitute with phase lsa
+          lsa_dup = ospf_lsa_dup(lsa1);
+          lsa_dup->area = area;
+          lsa_dup->lsdb = ospf->backbone->lsdb;
+          lsa_dup->data->ls_seqnum = lsa->data->ls_seqnum;
+          ospf_lsa_install(ospf,NULL,lsa_dup);
+          if(MY_DEBUG)
+            zlog_debug("install a lsa success");
+        }
       }
-
-      zlog_debug("install a lsa success");
     }
   }
-  manage_ase(last_phase);
+  return 0;
+}
+
+static int manage_LSDB(struct thread *thread)
+{
+  struct timeval help_time;
+  quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
+  if(MY_DEBUG)
+    zlog_debug("in func manage_LSDB(in add_phase first) at %ld.%ld ##########", help_time.tv_sec, help_time.tv_usec);
+  if(MY_DEBUG)
+    zlog_debug("before manage_LSDB, global_phase = %d, next_phase = %d, last_phase = %d", global_phase, next_phase_tmp, last_phase);
+  manage_router_lsa();
+  manage_ase();
+  modify_all_lsa_tag();
+  if(MY_DEBUG)
+    zlog_debug("after manage_LSDB, global_phase = %d, next_phase = %d, last_phase = %d", global_phase, next_phase_tmp, last_phase);
+  return 0;
+}
+//  =======================  240307 删除 =============================
+// static void ensure_peer_router_id_static()
+// {
+//   struct ospf* ospf = ospf_lookup();
+//   struct listnode *node, *nnode;
+//   struct ospf_interface *oi;
+//   struct route_node *rn;
+//   struct ospf_neighbor *nbr;
+//   if(peer_router_id_static.s_addr == 0)
+//   {
+//     for(ALL_LIST_ELEMENTS(ospf->oiflist,node,nnode,oi))
+//       if(oi->type==OSPF_IFTYPE_INTEROA)
+//       {
+//         for(rn = route_top(oi->nbrs);rn;rn=route_next(rn))
+//           if( nbr == (struct ospf_neighbor *)rn->info)
+//             peer_router_id_static.s_addr = nbr->router_id.s_addr;
+//       }
+//   }
+// }
+// timer进行星地静态路由(se_ase)管理，
+// 是否有必要，能否和load_se_ase和remove_se_ase相互结合？
+// static int modify_static(struct thread *thread)
+// {
+//   struct ospf* ospf = ospf_lookup();
+//   struct listnode *node, *nnode, *node1,*nnode1;
+//   char cmd_route[80];
+//   struct neighbor_info *nbr_info;
+//   struct se_ase_info *se_ase_info;
+//   struct ospf_lsa *lsa;
+//   struct route_node *rn;
+//   ensure_peer_router_id_static();
+//   for(ALL_LIST_ELEMENTS(neighbor_info_list_cur->n_list,node,nnode,nbr_info))
+//   {
+//     //look for the nbr_info of if_oa peer
+//     if(nbr_info->router_id.s_addr == peer_router_id_static.s_addr)
+//     {
+//       //if the link predicedlinkup in next phase
+//       if(nbr_info->phase_info[global_phase] == 0 && nbr_info->phase_info[last_phase] == 1)
+//         //add ip route static
+//         for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node1,nnode1,se_ase_info))
+//           //look for se_ase_info of self, if self is enable, add ip route static
+//           if(se_ase_info->router_id.s_addr == ospf->router_id_static.s_addr && se_ase_info->enable == BOADER_ENABLE)
+//             LSDB_LOOP(EXTERNAL_LSDB(ospf),rn,lsa)
+//               if(lsa->data->adv_router.s_addr == ospf->router_id_static.s_addr)
+//               {
+//                 sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id), peer_oa_str_static);
+//                 if(MY_DEBUG)
+//                   zlog_debug("in func manage_static ,cmd_route = %s",cmd_route);
+//                 if(system(cmd_route) == -1)
+//                   zlog_debug("cmd_route fail");
+//                 predictable_ase_cnt++;
+//               }
+//       //if the link predictedlinkdown in next phase
+//       else if (nbr_info->phase_info[global_phase] == 1 && nbr_info->phase_info[last_phase] == 0)
+//         //del ip route static
+//         for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list, node1, nnode1, se_ase_info))
+//           //look for se_ase_info of self
+//           if(se_ase_info->router_id.s_addr == ospf->router_id_static.s_addr && se_ase_info->enable == BOADER_ENABLE)
+//             LSDB_LOOP(EXTERNAL_LSDB(ospf),rn,lsa)
+//               if(lsa->data->adv_router.s_addr == ospf->router_id_static.s_addr)
+//               {
+//                 sprintf(cmd_route,"ip route del %s/16",inet_ntoa(lsa->data->id));
+//                 if(MY_DEBUG)
+//                   zlog_debug("in func manage_static, cmd_route=%s", cmd_route);
+//                 if(system(cmd_route) == -1)
+//                   zlog_debug("cmd_route fail\n");
+//                 predictable_ase_cnt++;
+//               }
+//     }
+//   }
+//   return 0;
+// }
+// ==================================================
+
+static int change_global_phase(struct thread *thread)
+{
+  if(MY_DEBUG)
+    zlog_debug("before change_global_phase, global_phase = %d, next_phase = %d, last_phase = %d", global_phase, next_phase_tmp, last_phase);
+  global_phase = next_phase_tmp;
+  if(MY_DEBUG)
+    zlog_debug("after change_global_phase, global_phase = %d, next_phase = %d, last_phase = %d", global_phase, next_phase_tmp, last_phase);
+  return 0;
+}
+
+// means add_slot in thesis
+DEFUN(add_phase,
+      add_phase_cmd,
+      "add_phase",
+      "add phase in cycle\n")
+{
+  last_phase = global_phase;
+  next_phase_tmp = (global_phase + 1) % phase_all;
+
+  struct ospf *ospf = ospf_lookup ();
+
+  struct timeval help_time;
+  quagga_gettime (QUAGGA_CLK_MONOTONIC, &help_time);
+  zlog_debug("in func add_phase, before change phase = %d, begin time at %ld.%ld ############", global_phase, help_time.tv_sec, help_time.tv_usec);
+
+  //manage database  use 10 temperary
+  ospf->t_manageLSDB = thread_add_timer(master, manage_LSDB, ospf, T_TEST);
+  // =====================   change_phase ===========================
+  ospf->t_change_global_phase = thread_add_timer(master, change_global_phase, ospf, T_TEST);
+  //==============================================================
   //do predicted linkdown and begin testing for predicted link up
   struct listnode *node, *nnode;
   struct neighbor_info *nbr_info;
   for(ALL_LIST_ELEMENTS(neighbor_info_list_cur->n_list,node,nnode,nbr_info))
   {
-    if(nbr_info->phase_info[global_phase]==1 && nbr_info->phase_info[last_phase]==0)
+    if(nbr_info->phase_info[next_phase_tmp] == 1 && nbr_info->phase_info[last_phase] == 0)
     {
       //predicted link down in 10 seconds
       predicted_linkdown_sub(nbr_info->router_id);
     }
-    if(nbr_info->phase_info[global_phase]==0 && nbr_info->phase_info[last_phase]==1)
+    if(nbr_info->phase_info[next_phase_tmp] == 0 && nbr_info->phase_info[last_phase] == 1)
     {
-      //begin testing and do predicted link up in 10 seconds
+      //begin testing and do predicted link up in 10 seconds, 0表示按照nbr->v_test设置定时时间
       begin_testing_sub(nbr_info->router_id,0);
     }
   }
-
-  //change ip route static
+  // change ip route static, should operate in timer
   // zlog_debug("in func ospf add phase, begin manage ip route static");
-  // struct in_addr peer_addr,peer_router_id;
-  // char peer_str[20];
-  // char cmd_route[80];
-  // peer_addr.s_addr=0;
-  // peer_router_id.s_addr=0;
-  // struct ospf_interface *oi;
-  // struct ospf_neighbor *nbr;
-  // struct listnode *node1,*nnode1,*node2,*nnode2;
+  // 此处没有必要对于静态路由进行修改，因为在nsm转换时已经进行修改了 240307 删除
+  // OSPF_TIMER_ON(ospf->t_modify_static, modify_static, T_TEST);
 
-  // struct se_ase_info *se_ase_info;
-
-  // for(ALL_LIST_ELEMENTS(ospf->oiflist,node,nnode,oi))
-  // {
-  //   if(oi->type==OSPF_IFTYPE_INTEROA)
-  //   {
-  //     peer_addr.s_addr=oi->if_oa_peer.s_addr;
-
-  //     for(rn=route_top(oi->nbrs);rn;rn=route_next(rn))
-  //     {
-  //       if(nbr=(struct ospf_neighbor *)rn->info)
-  //       {
-  //         peer_router_id.s_addr=nbr->router_id.s_addr;
-  //       }
-  //     }
-
-  //     sprintf(peer_str,"%s",inet_ntoa(peer_addr));
-  //   }
-  // }
-
-  // for(ALL_LIST_ELEMENTS(neighbor_info_list_cur->n_list,node,nnode,nbr_info))
-  // {
-  //   //look for the nbr_info of if_oa peer
-  //   if(nbr_info->router_id.s_addr==peer_router_id.s_addr)
-  //   {
-  //     //if the link predicedlinkup in next phase
-  //     if(nbr_info->phase_info[global_phase]==0 && nbr_info->phase_info[last_phase]==1)
-  //     {
-  //       //add ip route static
-
-  //       for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node1,nnode1,se_ase_info))
-  //       {
-  //         //look for se_ase_info of self, if self is enable, add ip route static
-  //         if(se_ase_info->router_id.s_addr==ospf->router_id_static.s_addr && se_ase_info->enable==se_ase_enable)
-  //         {
-  //           LSDB_LOOP(EXTERNAL_LSDB(ospf),rn,lsa)
-  //           {
-  //             if(lsa->data->adv_router.s_addr == ospf->router_id_static.s_addr)
-  //             {
-  //               sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id),peer_str);
-  //               zlog_debug("in func add_phase,cmd_route=%s",cmd_route);
-  //               system(cmd_route);
-  //             }
-  //           }
-  //         }
-  //       }
-  //     }
-  //     //if the link predictedlinkdown in next phase
-  //     else if (nbr_info->phase_info[global_phase]==1 && nbr_info->phase_info[last_phase]==0)
-  //     {
-  //       //del ip route static
-  //       for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node1,nnode1,se_ase_info))
-  //       {
-  //         //look for se_ase_info of self
-  //         if(se_ase_info->router_id.s_addr==ospf->router_id_static.s_addr && se_ase_info->enable==se_ase_enable)
-  //         {
-  //           LSDB_LOOP(EXTERNAL_LSDB(ospf),rn,lsa)
-  //           {
-  //             if(lsa->data->adv_router.s_addr == ospf->router_id_static.s_addr)
-  //             {
-  //               sprintf(cmd_route,"ip route del %s/16",inet_ntoa(lsa->data->id));
-  //               zlog_debug("in func add_phase,cmd_route=%s",cmd_route);
-  //               system(cmd_route);
-  //             }
-  //           }
-  //         }
-  //       }
-  //     }      
-  //   }
-  // }
-  //do spf calculation
-  ospf->t_spf_help=thread_add_timer(master, ospf_spf_help_timer, ospf, 11);
+  // mark tos for preset lsa, and do spf calculation
+  ospf->t_spf_help = thread_add_timer(master, ospf_spf_help_timer, ospf, T_TEST);
   return CMD_SUCCESS;
 }
+
+ALIAS (add_phase,
+       add_slot_cmd,
+       "add_slot",
+       "add_slot equals add_phase\n") 
 
 DEFUN(begin_running,
       begin_running_cmd,
       "begin_running",
       "begin_running\n")
 {
-  struct ospf *ospf=ospf_lookup ();
+  if(MY_DEBUG)
+    zlog_debug("in func begin_running");
+  struct ospf *ospf = ospf_lookup ();
     //do predicted linkdown and begin testing for predicted link up
   struct listnode *node, *nnode;
   struct neighbor_info *nbr_info;
   for(ALL_LIST_ELEMENTS(neighbor_info_list_cur->n_list,node,nnode,nbr_info))
   {
     //down the link in first phase
-    if(nbr_info->phase_info[0]==1)
+    if(nbr_info->phase_info[global_phase] == 1)
     {
       //predicted link down in 10 seconds
       predicted_linkdown_sub(nbr_info->router_id);
     }
   }
-  ospf->t_spf_help=thread_add_timer(master, ospf_spf_help_timer, ospf, 10);
+
+#ifdef HAS_STAION_DEFAULT_ROUTE
+  if(MY_DEBUG)
+    zlog_debug("in func ase_loadlsdb, before gen_default_route");
+  thread_add_timer(master, gen_default_route_helper, NULL, T_TEST);
+#endif
+
+  ospf->t_spf_help=thread_add_timer(master, ospf_spf_help_timer, ospf, T_TEST);
   return CMD_SUCCESS;
 }
 
@@ -9991,8 +10024,8 @@ DEFUN(if_inter_oa,
       "if_inter_oa A.B.C.D A.B.C.D ",
       "if_inter_oa in_addr peer_addr \n")
 {
-
-  zlog_debug("in func if_inter_oa,argv[0]=%s",argv[0]);
+  if(MY_DEBUG)
+    zlog_debug("in func if_inter_oa,argv[0]=%s",argv[0]);
   struct interface *ifp = vty->index;
   struct ospf_interface *oi;
   struct listnode *cnode;
@@ -10000,26 +10033,30 @@ DEFUN(if_inter_oa,
   struct ospf *ospf=ospf_lookup();
   struct in_addr addr_help;
   //here is network byte sequence
-  inet_aton(argv[0],&addr_help);
-  
-
+  inet_aton(argv[0],&addr_help);  
   //copy from ospf_network_run_interface, here is not only one co?
-
 
   for(ALL_LIST_ELEMENTS_RO (ifp->connected, cnode, co))
   {
-    if(addr_help.s_addr==co->address->u.prefix4.s_addr)
+    if(co->address->family == AF_INET && addr_help.s_addr == co->address->u.prefix4.s_addr)
     {
       oi = ospf_if_new (ospf, ifp, co->address);
       inet_aton(argv[1],&oi->if_oa_peer);
+
+      peer_oa_str_static = (char *) malloc(sizeof(char) * 64);
+      strcpy(peer_oa_str_static, argv[1]);
+
       oi->type = OSPF_IFTYPE_INTEROA;
-      oi=ospf_if_new(ospf,ifp,co->address);
       oi->connected = co;
       oi->params = ospf_lookup_if_params (ifp, oi->address->u.prefix4);
+      
       oi->area = ospf->backbone;
-      zlog_debug("in func if_inter_oa 1,co->address=%x/%d,co->des=%x/%d",co->address->u.prefix4.s_addr,co->address->prefixlen,co->destination->u.prefix4.s_addr,co->destination->prefixlen);
+      ospf_area_add_if(oi->area, oi);
+      if(MY_DEBUG)
+        zlog_debug("in func if_inter_oa 1,co->address=%x/%d,co->des=%x/%d",co->address->u.prefix4.s_addr,co->address->prefixlen,co->destination->u.prefix4.s_addr,co->destination->prefixlen);
       ospf_nbr_add_self (oi);
-      zlog_debug("in func if_inter_oa 2");
+      if(MY_DEBUG)
+        zlog_debug("in func if_inter_oa 2");
       if ((ospf->router_id.s_addr != 0) && if_is_operative (ifp)) 
         ospf_if_up (oi);
     }
@@ -10036,21 +10073,20 @@ DEFUN(if_se,
   struct ospf_interface *oi;
   struct listnode *cnode;
   struct connected *co;
-  struct connected *co_dup;
-  struct ospf *ospf=ospf_lookup();
+  // struct connected *co_dup;
+  struct ospf *ospf = ospf_lookup();
   for(ALL_LIST_ELEMENTS_RO (ifp->connected, cnode, co))
   {
-    if(co->address->family==AF_INET)
+    if(co->address->family == AF_INET)
     {
       oi = ospf_if_new (ospf, ifp, co->address);
       oi->type = OSPF_IFTYPE_SE;
-      oi=ospf_if_new(ospf,ifp,co->address);
       oi->connected = co;
       oi->params = ospf_lookup_if_params (ifp, oi->address->u.prefix4);
       oi->area = ospf->backbone;
       ospf_nbr_add_self (oi);
       ospf_area_add_if (oi->area, oi);
-    
+      if_se_name = ifp->name;
       if ((ospf->router_id.s_addr != 0) && if_is_operative (ifp)) 
         ospf_if_up (oi);
     }
@@ -10064,10 +10100,9 @@ DEFUN(print_co_info,
       "print connected info for a interface\n")
 {
   struct interface *ifp = vty->index;
-  struct ospf_interface *oi;
-  struct listnode *node,*nnode;
+  struct listnode *node;
   struct connected *co;
-  struct ospf *ospf=ospf_lookup();
+
   zlog_debug("in func print_co_info");  
   for(ALL_LIST_ELEMENTS_RO (ifp->connected,node, co))
   {
@@ -10121,7 +10156,7 @@ DEFUN(print_exinfo,
 }
 
 //se_info is for add_y, record orbit's phase, and which lsa needs modify when y change
-struct se_info_list *se_info_list_cur;
+
 
 static struct se_info *se_info_new()
 {
@@ -10155,7 +10190,8 @@ DEFUN(input_se_info,
 {
   DATA_INFO_STR data_info_str;
   fileToMatrix_str(argv[0],&data_info_str);
-  zlog_debug("in func input_se_info");
+  if(MY_DEBUG)
+    zlog_debug("in func input_se_info");
 
   se_info_list_cur->x_add=0;
   se_info_list_cur->x_max=atoi(data_info_str.matrix[0][0]);
@@ -10199,32 +10235,36 @@ DEFUN(print_se_info,
 
 static char *get_ip_i_rl(struct ospf_lsa *lsa,int i)
 {
-  zlog_debug("in func get_ip_i_rl");
+  if(MY_DEBUG)
+    zlog_debug("in func get_ip_i_rl");
 
   assert(lsa->data->type==OSPF_ROUTER_LSA);
   struct router_lsa *rl=(struct router_lsa *)lsa->data;
   char *ret;
-  for(int k=0;k<rl->links;++k)
+  for(int k=0; k < rl->links; ++k)
   {
-    if(rl->link[k].type==LSA_LINK_TYPE_SE)
+    if(rl->link[k].type == LSA_LINK_TYPE_SE)
     {
       ret=(char *)&rl->link[k].link_id.s_addr;
-      zlog_debug("ip_%d=%d",i,ret[i]);
-      zlog_debug("ip_0,1,2,3=%d,%d,%d,%d",ret[0],ret[1],ret[2],ret[3]);
+      if(MY_DEBUG)
+        zlog_debug("ip_%d=%d",i,ret[i]);
+      if(MY_DEBUG)
+        zlog_debug("ip_0,1,2,3=%d,%d,%d,%d",ret[0],ret[1],ret[2],ret[3]);
       return &ret[i];
     }
   }
   return NULL;
 }
 
-struct se_ase_info_list *se_ase_info_list_cur;
+
+static struct se_ase_info *se_ase_info_new();
 
 static struct se_ase_info *se_ase_info_new()
 {
   struct se_ase_info *p=calloc(1,sizeof(struct se_ase_info));
-  p->ase_list=list_new();
-  p->ase_list->del=NULL;
-  p->enable=se_ase_enable;
+  p->ase_list = list_new();
+  p->ase_list->del = NULL;
+  p->enable = BOADER_ENABLE;
   return p;
 }
 static void se_ase_info_free(void *p)
@@ -10235,13 +10275,13 @@ static void se_ase_info_free(void *p)
 }
 struct se_ase_info_list *se_ase_info_list_new()
 {
-  struct se_ase_info_list *p=calloc(1,sizeof(struct se_ase_info_list));
-  p->se_ase_list=list_new();
-  p->se_ase_list->del=se_ase_info_free;
+  struct se_ase_info_list *p = calloc(1,sizeof(struct se_ase_info_list));
+  p->se_ase_list = list_new();
+  p->se_ase_list->del = se_ase_info_free;
   return p;
 }
 
-void  se_ase_info_list_free(struct se_ase_info_list *p)
+void se_ase_info_list_free(struct se_ase_info_list *p)
 {
   if(p->se_ase_list!=NULL)
   {
@@ -10261,7 +10301,8 @@ static void gen_se_ase(struct se_ase_info *p)
   //struct in_addr mask;
   //int masklen=16;
   //masklen2ip(masklen,&mask);
-  zlog_debug("in func gen_se_ase");
+  if(MY_DEBUG)
+    zlog_debug("in func gen_se_ase");
 
   struct as_external_lsa *ase;
   for(i=0;i<p->x_count;++i)
@@ -10273,12 +10314,12 @@ static void gen_se_ase(struct se_ase_info *p)
     lsah->options=2;
     lsah->type=5;
 
-    s_addr_h=(0xa<<24)+(p->x_list[i]<<16);
-    lsah->id.s_addr=htonl(s_addr_h);
-    lsah->adv_router.s_addr=p->router_id.s_addr;
+    s_addr_h = (0xa<<24)+(p->x_list[i]<<16);
+    lsah->id.s_addr = htonl(s_addr_h);
+    lsah->adv_router.s_addr = p->router_id.s_addr;
 
-    lsah->ls_seqnum=htonl(OSPF_INITIAL_SEQUENCE_NUMBER);
-    lsah->length=36;
+    lsah->ls_seqnum = htonl(OSPF_INITIAL_SEQUENCE_NUMBER);
+    lsah->length = htons(36);
 
     stream_forward_endp (s, OSPF_LSA_HEADER_SIZE);
 
@@ -10295,17 +10336,17 @@ static void gen_se_ase(struct se_ase_info *p)
     //route_tag
     stream_putl(s,0);
     
-    se_ase->data=ospf_lsa_data_new(36);
+    se_ase->data = ospf_lsa_data_new(36);
     memcpy(se_ase->data,STREAM_DATA (s),36);
-    ospf_lsa_is_self_originated(ospf,se_ase);
-
-    zlog_debug("before checksum calc");
+    ospf_lsa_is_self_originated(ospf, se_ase);
+    if(MY_DEBUG)
+      zlog_debug("before checksum calc");
     //lsah->checksum=ospf_lsa_checksum(lsah);
     lsah->checksum=0;
-    zlog_debug("after checksum calc");
-
-    se_ase->lock=1;
-    se_ase->lsdb=vty_test_db;
+    if(MY_DEBUG)
+      zlog_debug("after checksum calc, lsa->lock = %d", se_ase->lock);
+    // se_ase->lock=1;
+    se_ase->lsdb=backup_lsdb;
 
     se_ase->links_count=1;
     se_ase->phase_count=p->phase_count;
@@ -10316,40 +10357,27 @@ static void gen_se_ase(struct se_ase_info *p)
       se_ase->phase_matrix[0][j]=p->phase_vector[j];
     }
 
-    ospf_lsdb_add(vty_test_db,se_ase);
+    ospf_lsdb_add(backup_lsdb,se_ase);
 
     stream_free(s);
     s=NULL;
     listnode_add(p->ase_list,se_ase);
 
     ase=(struct as_external_lsa *)se_ase->data;
-    zlog_debug("ase->id=%x,adv=%x,mask=%x",ase->header.id.s_addr,ase->header.adv_router.s_addr,ase->mask.s_addr);
+    if(MY_DEBUG)
+      zlog_debug("ase->id=%x,adv=%x,mask=%x",ase->header.id.s_addr,ase->header.adv_router.s_addr,ase->mask.s_addr);
   }
-
 }
 
-int predictable_ase_cnt;
-
+// operation for static routes in broader node
 void static_inter_star_operation(int add, int predictable)
 {
   struct ospf *ospf=ospf_lookup();
+  if(MY_DEBUG)
+    zlog_debug("in func static_inter_star_operation,add=%d,predictable=%d",add,predictable);
 
-  char peer_str[20];
-  zlog_debug("in func static_inter_star_operation,add=%d,predictable=%d",add,predictable);
-
-  struct ospf_interface *oi;
-  struct in_addr peer_addr;
   struct listnode *node,*nnode,*node1,*nnode1;
-  peer_addr.s_addr=0;
 
-  for(ALL_LIST_ELEMENTS(ospf->oiflist,node,nnode,oi))
-  {
-    if(oi->type==OSPF_IFTYPE_INTEROA)
-    {
-      peer_addr.s_addr=oi->if_oa_peer.s_addr;
-      sprintf(peer_str,"%s",inet_ntoa(peer_addr));
-    }
-  }
   char cmd_route[50];
   struct ase_info *p;
   struct ospf_lsa *lsa;
@@ -10361,27 +10389,31 @@ void static_inter_star_operation(int add, int predictable)
       {
         if(add)
         {
-          sprintf(cmd_route,"ip route add %s/20 via %s",inet_ntoa(lsa->data->id),peer_str);
+          sprintf(cmd_route,"ip route add %s/20 via %s",inet_ntoa(lsa->data->id), peer_oa_str_static);
         }
         else
         {
           sprintf(cmd_route,"ip route del %s/20",inet_ntoa(lsa->data->id));
         }
-        zlog_debug("in func static_inter_star_operation,cmd_route=%s",cmd_route);
-        system(cmd_route);
+        if(MY_DEBUG)
+          zlog_debug("in func static_inter_star_operation,cmd_route=%s",cmd_route);
+        if(system(cmd_route) == -1)
+          zlog_debug("cmd_route fail\n");
         if(predictable)
         {
           predictable_ase_cnt++;
-          zlog_debug("in func static_inter_star_operation, predictable_ase_cnt=%d",predictable_ase_cnt); 
+          if(MY_DEBUG)
+            zlog_debug("in func static_inter_star_operation, predictable_ase_cnt=%d",predictable_ase_cnt); 
         } 
       }      
       break;
     }
   }
-  zlog_debug("after static_inter_star_operation, predictable_ase_cnt=%d",predictable_ase_cnt);  
+  if(MY_DEBUG)
+    zlog_debug("after static_inter_star_operation, predictable_ase_cnt=%d",predictable_ase_cnt);  
 }
-
-void remove_se_ase(struct in_addr router_id,int is_self, int predictable)
+// ===============  wyc note: 此处会修改se_ase_info->enable，标注邻居的通断情况，在nsm change state时会进行调用
+void remove_se_ase(struct in_addr router_id, int is_self, int predictable)
 {
   struct ospf *ospf=ospf_lookup();
   struct route_node *rn;
@@ -10389,117 +10421,117 @@ void remove_se_ase(struct in_addr router_id,int is_self, int predictable)
   struct ospf_lsa *lsa;
   struct as_external_lsa *ase;
   struct prefix p;
-  rt=ospf->lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
-
-  zlog_debug("in func remove_se_ase,router_id=%x,is_self=%d,predictable=%d",router_id.s_addr,is_self,predictable);
+  rt = ospf->lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
+  if(MY_DEBUG)
+    zlog_debug("in func remove_se_ase,router_id=%x,is_self=%d,predictable=%d",router_id.s_addr,is_self,predictable);
 
   struct listnode *node,*nnode;
   struct se_ase_info *se_ase_info;
-  char change_flag=0;
-  for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node,nnode,se_ase_info))
+  char change_flag = 0;
+  for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list, node, nnode, se_ase_info))
   {
-    zlog_debug("se_ase_info->router-id=%x,enable=%d",se_ase_info->router_id.s_addr,se_ase_info->enable);
-    if(se_ase_info->router_id.s_addr == router_id.s_addr && se_ase_info->enable == se_ase_enable)
+    if(MY_DEBUG)
+      zlog_debug("se_ase_info->router-id = %x, enable = %d", se_ase_info->router_id.s_addr, se_ase_info->enable);
+    if(se_ase_info->router_id.s_addr == router_id.s_addr && se_ase_info->enable == BOADER_ENABLE)
     {
-      se_ase_info->enable = se_ase_notenable;
-      change_flag=1;
+      se_ase_info->enable = BOADER_NOT_ENABLE;
+      change_flag = 1;
       break;
     }
   }
-  if (change_flag==0)
+  if (change_flag == 0)
   {
     return;
   }
   char cmd_route[50];
-  for(rn=route_top(rt);rn;rn=route_next(rn))
+  for(rn = route_top(rt); rn; rn = route_next(rn))
   {
-    if(rn->info!=NULL)
+    if(rn->info != NULL)
     {
-      lsa=(struct ospf_lsa *)rn->info;
-      ase=(struct as_external_lsa *)lsa->data;
+      lsa = (struct ospf_lsa *)rn->info;
+      ase = (struct as_external_lsa *)lsa->data;
 
-      p.u.prefix4.s_addr=lsa->data->id.s_addr;
-      p.prefixlen=ip_masklen(ase->mask);
-
-      if(lsa->data->adv_router.s_addr==router_id.s_addr && prefix_match(se_prefix,&p))
+      p.u.prefix4.s_addr = lsa->data->id.s_addr;
+      p.prefixlen = ip_masklen(ase->mask);
+      // the lsa store in as_ase_list is the backup lsa in the backup_lsdb, so we cannot use this info to remove the se_ase in running lsdb
+      if(lsa->data->adv_router.s_addr == router_id.s_addr && (prefix_match(se_prefix,&p) /*|| lsa->data->id.s_addr == 0*/ ))
       {
-        //modify to maxage
-        lsa->data->ls_age=htons (OSPF_LSA_MAXAGE);
-        //timer on maxage timer
-        ospf_lsa_maxage (ospf, lsa);
+        // 不可预测时，需要修改数据库，而可预测时数据库不变，只更改边界路由
+        if(!predictable)
+        {
+          //modify to maxage
+          lsa->data->ls_age = htons (OSPF_LSA_MAXAGE);
+          //delete lsa
+          ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+          ospf_lsdb_delete (lsa->lsdb, lsa);
+        }
         if(is_self)
         {
+          // we do cmd_route here, this will cause ei_info read in ospf_zebra_read_ipv4
           sprintf(cmd_route,"ip route del %s/16",inet_ntoa(lsa->data->id));
-          zlog_debug("in func remove_se_ase,cmd_route=%s",cmd_route);
-          system(cmd_route);
-          if(predictable)
-          {
-            predictable_ase_cnt++;
-          }
+          if(MY_DEBUG)
+            zlog_debug("in func remove_se_ase,cmd_route=%s",cmd_route);
+          if(system(cmd_route) == -1)
+            zlog_debug("cmd_route fail\n");
+          // se_ase不会被报文传输，所以增加时predictable_ase_count需要增加
+          predictable_ase_cnt++;
         }
       }
     }
   }
-  zlog_debug("after remove_se_ase,predictable_ase_cnt=%d",predictable_ase_cnt);
+  if(is_self)
+    peer_enable = 0;
+  if(MY_DEBUG)
+    zlog_debug("after remove_se_ase,predictable_ase_cnt=%d, peer_enable = %d",predictable_ase_cnt, peer_enable);
   ospf_spf_calculate_schedule(ospf);
 }
-void load_se_ase(struct in_addr router_id,int is_self, int predictable)
-{
-  struct ospf *ospf=ospf_lookup();
 
+void load_se_ase(struct in_addr router_id, int is_self, int predictable)
+{
+  struct ospf *ospf = ospf_lookup();
   struct ospf_lsa *lsa,*lsa1;
   struct se_ase_info *se_ase_info;
   struct listnode *node,*nnode,*node1,*nnode1;
   char cmd_route[50];
-  char peer_str[20];
-  int is_change=0;
-  zlog_debug("in func load_se_ase, router_id=%x,is_self=%d,predictable=%d",router_id.s_addr,is_self,predictable);
-
-  struct ospf_interface *oi;
-  struct in_addr peer_addr;
-  peer_addr.s_addr=0;
-
-  for(ALL_LIST_ELEMENTS(ospf->oiflist,node,nnode,oi))
-  {
-    if(oi->type==OSPF_IFTYPE_INTEROA)
-    {
-      peer_addr.s_addr=oi->if_oa_peer.s_addr;
-      sprintf(peer_str,"%s",inet_ntoa(peer_addr));
-    }
-  }
-  
+  int is_change = 0;
+  if(MY_DEBUG)
+    zlog_debug("in func load_se_ase, router_id=%x,is_self=%d,predictable=%d",router_id.s_addr,is_self,predictable);
   for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node,nnode,se_ase_info))
   {
-    if(se_ase_info->router_id.s_addr==router_id.s_addr && se_ase_info->enable== se_ase_notenable)
+    if(se_ase_info->router_id.s_addr == router_id.s_addr && se_ase_info->enable == BOADER_NOT_ENABLE)
     {
-      is_change=1;
-      se_ase_info->enable=se_ase_enable;
+      is_change = 1;
+      se_ase_info->enable = BOADER_ENABLE;
       for(ALL_LIST_ELEMENTS(se_ase_info->ase_list,node1,nnode1,lsa))
       {
-        lsa->data->ls_age=0;
-        lsa1=ospf_lsa_dup(lsa);
-        lsa1->lsdb=ospf->lsdb;
-        lsa1->area=NULL;
-        ospf_lsa_install(ospf,NULL,lsa1);
+        lsa->data->ls_age = 0;
+        // 不可预测时，需要修改数据库，而可预测时数据库不变，只更改边界路由
+        if(!predictable)
+        {
+          lsa1 = ospf_lsa_dup(lsa);
+          lsa1->lsdb = ospf->lsdb;
+          lsa1->area = NULL;
+          ospf_lsa_install(ospf,NULL,lsa1);
+        }
         if(is_self)
         {
-          sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id),peer_str);
-          zlog_debug("in func load_se_ase,cmd_route=%s",cmd_route);
-          system(cmd_route); 
-          if(predictable)
-          {
-            predictable_ase_cnt++;
-          }
+          sprintf(cmd_route,"ip route add %s/16 via %s", inet_ntoa(lsa->data->id), peer_oa_str_static);
+          if(MY_DEBUG)
+            zlog_debug("in func load_se_ase,cmd_route=%s", cmd_route);
+          if(system(cmd_route) == -1)
+            zlog_debug("cmd_route fail\n"); 
+          // se_ase不会被报文传输，所以增加时predictable_ase_count需要增加
+          predictable_ase_cnt++;
         }
       }
-      
       break;
     }
   }
-
-  zlog_debug("after load_se_ase,predictable_ase_cnt=%d",predictable_ase_cnt);
-
-  if(is_change==1){
+  if(is_self)
+    peer_enable = 1;
+  if(MY_DEBUG)
+    zlog_debug("after load_se_ase, predictable_ase_cnt = %d, peer_enable = %d", predictable_ase_cnt, peer_enable);
+  if(is_change == 1){
     ospf_spf_calculate_schedule(ospf);
   }
 }
@@ -10515,7 +10547,6 @@ DEFUN(test_remove_se_ase,
   struct in_addr router_id;
   inet_aton(argv[0],&router_id);
   remove_se_ase(router_id,1,atoi(argv[1]));
-
   return CMD_SUCCESS;
 }
 
@@ -10527,6 +10558,7 @@ DEFUN(test_load_se_ase,
   struct in_addr router_id;
   inet_aton(argv[0],&router_id);
   load_se_ase(router_id,1,atoi(argv[1]));
+  
   return CMD_SUCCESS;
 }
 
@@ -10537,7 +10569,8 @@ DEFUN(input_se_ase_info,
 {
   DATA_INFO_STR data_info_str;
   fileToMatrix_str(argv[0],&data_info_str);
-  zlog_debug("in func input_se_ase_info");
+  if(MY_DEBUG)
+    zlog_debug("in func input_se_ase_info");
 
   struct ospf *ospf=ospf_lookup();
 
@@ -10547,30 +10580,16 @@ DEFUN(input_se_ase_info,
   struct listnode *node,*nnode,*node1,*nnode1;
   int i,j;
 
-  struct ospf_interface *oi;
-  struct in_addr peer_addr;
-  peer_addr.s_addr=0;
-  char cmd_route[50];
-  char peer_str[20];
-  for(ALL_LIST_ELEMENTS(ospf->oiflist,node,nnode,oi))
+  for(i=1; i<data_info_str.row_total; i = i+2)
   {
-    if(oi->type==OSPF_IFTYPE_INTEROA)
+    p = se_ase_info_new();
+    inet_aton(data_info_str.matrix[i][0], &p->router_id);
+    p->enable = BOADER_ENABLE;
+    p->x_count = atoi(data_info_str.matrix[i][1]);
+    p->x_list = calloc(p->x_count, sizeof(int));
+    for(j = 2; j < 2 + p->x_count; ++j)
     {
-      peer_addr.s_addr=oi->if_oa_peer.s_addr;
-      sprintf(peer_str,"%s",inet_ntoa(peer_addr));
-    }
-  }
-
-  for(i=1;i<data_info_str.row_total;i=i+2)
-  {
-    p=se_ase_info_new();
-    inet_aton(data_info_str.matrix[i][0],&p->router_id);
-    p->enable=se_ase_enable;
-    p->x_count=atoi(data_info_str.matrix[i][1]);
-    p->x_list=calloc(p->x_count,sizeof(int));
-    for(j=2;j<2+p->x_count;++j)
-    {
-      p->x_list[j-2]=atoi(data_info_str.matrix[i][j]);
+      p->x_list[j-2] = atoi(data_info_str.matrix[i][j]);
     }
 
     p->phase_count=atoi(data_info_str.matrix[i+1][0]);
@@ -10582,7 +10601,7 @@ DEFUN(input_se_ase_info,
     listnode_add(se_ase_info_list_cur->se_ase_list,p);
 
   }
-  //gen lsa and install in vty_test_db 
+  //gen lsa and install in backup_lsdb 
   for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node,nnode,p))
   {
     gen_se_ase(p);
@@ -10599,13 +10618,17 @@ DEFUN(input_se_ase_info,
       ospf_lsa_install(ospf,NULL,lsa1);
       if(p->router_id.s_addr==ospf->router_id_static.s_addr)
       {
-        sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id),peer_str);
-        zlog_debug("in func input_se_ase_info,p->router_id=%x,cmd_route=%s",p->router_id.s_addr,cmd_route);
-        system(cmd_route);
+        char cmd_route[64];
+        sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id),peer_oa_str_static);
+        if(MY_DEBUG)
+          zlog_debug("in func input_se_ase_info,p->router_id=%x,cmd_route=%s",p->router_id.s_addr,cmd_route);
+        if(system(cmd_route) == -1)
+          zlog_debug("cmd_route fail\n");
       }
     }
   }
-  zlog_debug("after_input_se_ase_info, predictable_ase_cnt=%d",predictable_ase_cnt);
+  if(MY_DEBUG)
+    zlog_debug("after_input_se_ase_info, predictable_ase_cnt=%d",predictable_ase_cnt);
   ospf_spf_calculate_schedule(ospf);
   return CMD_SUCCESS;
 }
@@ -10651,8 +10674,13 @@ DEFUN(se_add_y,
   struct listnode *node,*nnode;
   struct se_info *se_info;
   struct ospf *ospf=ospf_lookup();
-  struct route_table *rt=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
-  struct route_table *rt_back=vty_test_db->type[OSPF_ROUTER_LSA].db;
+  struct timeval help_time;
+  quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
+  zlog_debug("in func add_y, begin time at %ld.%ld ################, predictable_ase_cnt = %d", help_time.tv_sec, help_time.tv_usec, predictable_ase_cnt);
+  // only modify router lsa when add_y occur
+  struct route_table *rt[2];
+  rt[0] = ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
+  rt[1] = backup_lsdb->type[OSPF_ROUTER_LSA].db;
 
   struct route_node *rn;
   struct ospf_lsa *lsa;
@@ -10660,78 +10688,84 @@ DEFUN(se_add_y,
 
   for(ALL_LIST_ELEMENTS(se_info_list_cur->se_list,node,nnode,se_info))
   {
-    se_info->k = (se_info->k+1) % (se_info_list_cur->k_max);
-
+    se_info->k = (se_info->k + 1) % se_info_list_cur->k_max;
     //after modify, if k=0, then modify ip2
-    if(se_info->k==0)
+    if(se_info->k == 0)
     {
-      zlog_debug("modify x=%d 's y here",se_info->x);
-      for(rn=route_top(rt);rn;rn=route_next(rn))
-      {
-        if(rn->info!=NULL)
+      if(MY_DEBUG)
+        zlog_debug("modify x = %d's y here", se_info->x);
+      for(int u = 0; u < 2; ++u)
+        for(rn = route_top(rt[u]); rn; rn = route_next(rn))
         {
-
-          lsa=(struct ospf_lsa *)rn->info;
-          ip1=get_ip_i_rl(lsa,1);
-          ip2=get_ip_i_rl(lsa,2);
-
-          if(ip1==NULL || ip2==NULL)
+          if(rn->info != NULL)
           {
-            return CMD_WARNING;
-          }
-
-          zlog_debug("lsa->router-id=%x",lsa->data->adv_router.s_addr);
-
-          zlog_debug("before add, lsa->id1=%d,id2=%d",*ip1,*ip2);
-          if(*ip1==(char)se_info->x)
-          {
-            //*ip2= ((*ip2)+1) % (se_info_list_cur->y_max) ;
-            *ip2-=1;
-            if(*ip2<0)
+            lsa = (struct ospf_lsa *)rn->info;
+            ip1 = get_ip_i_rl(lsa, 1);
+            ip2 = get_ip_i_rl(lsa, 2);
+            if(ip1==NULL || ip2==NULL)
             {
-              *ip2+=se_info_list_cur->y_max;
+              return CMD_WARNING;
             }
-            zlog_debug("after add, lsa->id1=%d,id2=%d",*ip1,*ip2);
-          }
-          else
-          {
-            zlog_debug("don't add");
-          }
-          
-        }
-      }
-      //modify vty_tmp_db backup 
-      for(rn=route_top(rt_back);rn;rn=route_next(rn))
-      {
-        if(rn->info!=NULL)
-        {
-
-          lsa=(struct ospf_lsa *)rn->info;
-          ip1=get_ip_i_rl(lsa,1);
-          ip2=get_ip_i_rl(lsa,2);
-
-          if(ip1==NULL || ip2==NULL)
-          {
-            return CMD_WARNING;
-          }
-          if(*ip1==(char)se_info->x)
-          {
-            *ip2-=1;
-            if(*ip2<0)
+            if(MY_DEBUG)
+              zlog_debug("lsa->router-id=%x",lsa->data->adv_router.s_addr);
+            if(MY_DEBUG)
+              zlog_debug("before add, lsa->id1=%d,id2=%d",*ip1,*ip2);
+            if(*ip1 == (char)se_info->x)
             {
-              *ip2+=se_info_list_cur->y_max;
-            }
-          }          
+              *ip2 -= 1;
+              if(*ip2 < 0)
+              {
+                *ip2 += se_info_list_cur->y_max;
+              }
+              if(MY_DEBUG)
+                zlog_debug("after add, lsa->id1=%d,id2=%d",*ip1,*ip2);
+            }           
+          }
         }
-      }
-
     }
-    zlog_debug("after add, se_info->x=%d,k=%d,x0=%d",se_info->x,se_info->k,se_info->x0);
+    if(MY_DEBUG)
+      zlog_debug("after add, se_info->x=%d,k=%d,x0=%d",se_info->x,se_info->k,se_info->x0);
   }
+  // station operation
+  // remove old route
+#ifdef HAS_STAION_DEFAULT_ROUTE
+  remove_inside_oa_defailt(1, 1);
+  // calc new state
+#endif
+  station_info_curr.yadd = (station_info_curr.yadd + 1) % (station_info_curr.n * station_info_curr.k);
+
+  // ifconfig here
+  // 本节点现在位于的地理服务域
+  int my_x = (station_info_curr.x0 + station_info_curr.xadd) % station_info_curr.P;
+  int my_y = (station_info_curr.y0 - (station_info_curr.yadd + station_info_curr.k0) / station_info_curr.k) % station_info_curr.n;
+  if(my_y < 0)
+    my_y += station_info_curr.n;
+  char cmd_route[50];
+  sprintf(cmd_route, "ifconfig %s 10.%d.%d.1/24", if_se_name, my_x, my_y);
+
+  if(system(cmd_route) == -1)
+    zlog_debug("cmd_ifconfig fail\n");
+  predictable_ase_cnt += 2;
+  if(MY_DEBUG)
+    zlog_debug("in se_add_y, ifconfig = %s, predictable_ase_cnt = %d", cmd_route, predictable_ase_cnt);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+  check_oa_station();
+  // calc new route
+  if(default_info.curr_stat >= 0)
+    gen_myself_default_route(1);
+  if(default_info.curr_stat >= -1)
+    gen_inside_oa_default_route();
+
+  
+#endif
+
+  // modify tag after yadd increase
+  modify_all_lsa_tag();
+  del_asel_dr_outside();
+  // recalaculate routes
   ospf_spf_calculate_schedule(ospf);
   return CMD_SUCCESS;
-}
-
+}// end add_y
 
 
 DEFUN(se_add_x,
@@ -10742,9 +10776,10 @@ DEFUN(se_add_x,
   struct listnode *node,*nnode,*node1,*nnode1;
   struct se_info *se_info;
   struct ospf *ospf=ospf_lookup();
-
-  struct route_table *rt=ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
-  struct route_table *rt_back=vty_test_db->type[OSPF_ROUTER_LSA].db;
+  
+  struct route_table *rt[2];
+  rt[0] = ospf->backbone->lsdb->type[OSPF_ROUTER_LSA].db;
+  rt[1] = backup_lsdb->type[OSPF_ROUTER_LSA].db;
 
   struct route_node *rn;
   struct ospf_lsa *lsa,*lsa1;
@@ -10752,152 +10787,98 @@ DEFUN(se_add_x,
   char x_before;
   char cmd_route[50];
 
-
-  zlog_debug("in func se_add_x");
-
-  for(rn=route_top(rt);rn;rn=route_next(rn))
-  {
-    if(rn->info!=NULL)
+  struct timeval help_time;
+  quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
+  zlog_debug("in func se_add_x, begin time at %ld.%ld #################, predictable_ase_cnt = %d, peer_enable = %d", help_time.tv_sec, help_time.tv_usec, predictable_ase_cnt, peer_enable);
+  
+  for(int u = 0; u < 2; ++u)
+    for(rn=route_top(rt[u]);rn;rn=route_next(rn))
     {
-      lsa=(struct ospf_lsa *)rn->info;
-      lsa->se_x_flag=se_x_not_modify;
+      if(rn->info!=NULL)
+      {
+        lsa = (struct ospf_lsa *)rn->info;
+        lsa->se_x_flag = se_x_not_modify;
+      }
     }
-  }
-  for(rn=route_top(rt_back);rn;rn=route_next(rn))
-  {
-    if(rn->info!=NULL)
-    {
-      lsa=(struct ospf_lsa *)rn->info;
-      lsa->se_x_flag=se_x_not_modify;
-    }
-  }
 
-  //modify inner oa route 
+  //modify inner oa route (router lsa)
   for(ALL_LIST_ELEMENTS(se_info_list_cur->se_list,node,nnode,se_info))
   {
-    x_before=(char)se_info->x;
-    se_info->x=(se_info->x+1) % (se_info_list_cur->x_max);
+    x_before = (char)se_info->x;
+    se_info->x = (se_info->x+1) % (se_info_list_cur->x_max);
     se_info_list_cur->x_add++;
     //modify running lsdb
-
-    for(rn=route_top(rt);rn;rn=route_next(rn))
-    {
-      if(rn->info!=NULL)
+    for(int u = 0; u<2; ++u)
+      for(rn = route_top(rt[u]); rn; rn = route_next(rn))
       {
+        if(rn->info!=NULL)
+        {
 
-        lsa=(struct ospf_lsa *)rn->info;
-        ip1=get_ip_i_rl(lsa,1);
-        zlog_debug("lsa->router-id=%x",lsa->data->adv_router.s_addr);
-        zlog_debug("before add, lsa->id1=%d,lsa->se_x_flag=%d",*ip1,lsa->se_x_flag);
-        if(ip1==NULL )
-        {
-          return CMD_WARNING;
-        }
-        if(*ip1==x_before && lsa->se_x_flag==se_x_not_modify)
-        {
-          *ip1=(x_before+1)%(se_info_list_cur->x_max);
-          lsa->se_x_flag=se_x_modify;
-          zlog_debug("after add, lsa->id1=%d,lsa->se_x_flag=%d",*ip1,lsa->se_x_flag);
+          lsa=(struct ospf_lsa *)rn->info;
+          ip1=get_ip_i_rl(lsa,1);
+          if(MY_DEBUG)
+            zlog_debug("lsa->router-id=%x",lsa->data->adv_router.s_addr);
+          if(MY_DEBUG)
+            zlog_debug("before add, lsa->id1=%d,lsa->se_x_flag=%d",*ip1,lsa->se_x_flag);
+          if(ip1==NULL )
+          {
+            return CMD_WARNING;
+          }
+          if(*ip1 == x_before && lsa->se_x_flag == se_x_not_modify)
+          {
+            *ip1=(x_before+1)%(se_info_list_cur->x_max);
+            lsa->se_x_flag=se_x_modify;
+            if(MY_DEBUG)
+              zlog_debug("after add, lsa->id1=%d,lsa->se_x_flag=%d",*ip1,lsa->se_x_flag);
+          }
         }
       }
-    }
-    //modify backup 
-
-    for(rn=route_top(rt_back);rn;rn=route_next(rn))
-    {
-      if(rn->info!=NULL)
-      {
-
-        lsa=(struct ospf_lsa *)rn->info;
-        ip1=get_ip_i_rl(lsa,1);
-
-        if(ip1==NULL )
-        {
-          return CMD_WARNING;
-        }
-        if(*ip1==x_before && lsa->se_x_flag==se_x_not_modify)
-        {
-          *ip1=(x_before+1)%(se_info_list_cur->x_max);
-          lsa->se_x_flag=se_x_modify;
-        }
-      }
-    }
-
   }
-  zlog_debug("in func se_add_x, after modify inner oa route");
-  //modify inter_oa route
-  rt=ospf->lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
-  rt_back=ospf->lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
+  if(MY_DEBUG)
+    zlog_debug("in func se_add_x, after modify inner oa route, predictable_ase_cnt = %d", predictable_ase_cnt);
+  //modify inter_oa route (as-external-lsa)
+  rt[0] = ospf->lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
+  rt[1] = backup_lsdb->type[OSPF_AS_EXTERNAL_LSA].db;
 
   struct prefix lsa_p;
   struct as_external_lsa *ase;
-
-  for(rn=route_top(rt);rn;rn=route_next(rn))
-  {
-    if(rn->info!=NULL)
+  // se_add_x时，只有处于ioa状态的邻居才能添加和删除默认路由，处于ioa_leaving或者down状态的邻居则不能添加或者删除默认路由
+  // TODO: for ioa_leaving, don't add
+  // delete old route
+  for(int u=0; u<2; ++u)
+    for(rn = route_top(rt[u]); rn; rn = route_next(rn))
     {
-      lsa=(struct ospf_lsa *)rn->info;
-      if(lsa->data->type==OSPF_AS_EXTERNAL_LSA)
+      if(rn->info != NULL)
       {
-        ase=(struct as_external_lsa *)lsa->data;
-        lsa_p.u.prefix4.s_addr=ase->header.id.s_addr;
-        lsa_p.prefixlen=ip_masklen(ase->mask);
-        if(prefix_match(se_prefix,&lsa_p))
+        lsa = (struct ospf_lsa *)rn->info;
+        if(lsa->data->type == OSPF_AS_EXTERNAL_LSA)
         {
-          //delete lsa
-          //modify to maxage
-          lsa->data->ls_age=htons (OSPF_LSA_MAXAGE);
-          //timer on maxage timer
-          ospf_lsa_maxage (ospf, lsa);
-          if(lsa->data->adv_router.s_addr==ospf->router_id_static.s_addr)
+          ase = (struct as_external_lsa *)lsa->data;
+          lsa_p.u.prefix4.s_addr = ase->header.id.s_addr;
+          lsa_p.prefixlen = ip_masklen(ase->mask);
+          if(prefix_match(se_prefix, &lsa_p))
           {
-            sprintf(cmd_route,"ip route del %s/16",inet_ntoa(lsa->data->id));
-            zlog_debug("in func add_x,lsa->id=%x,cmd_route=%s",lsa->data->adv_router.s_addr,cmd_route);
-            system(cmd_route);
-            predictable_ase_cnt++;
+            //delete lsa
+            //modify to maxage
+            lsa->data->ls_age=htons (OSPF_LSA_MAXAGE);
+            ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+            ospf_lsdb_delete (lsa->lsdb, lsa);
+            // 此处只删掩码长度为16的外部网段的路由，不删除直连接口的路由
+            if(lsa->data->adv_router.s_addr==ospf->router_id_static.s_addr && u == 0 && lsa_p.prefixlen == 16 && peer_enable) // only modify once
+            {
+              sprintf(cmd_route, "ip route del %s/16", inet_ntoa(lsa->data->id));
+              if(MY_DEBUG)
+                zlog_debug("in func add_x, lsa->id = %x, cmd_route = %s",lsa->data->adv_router.s_addr,cmd_route);
+              if(system(cmd_route) == -1)
+                zlog_debug("cmd_route fail\n");
+              predictable_ase_cnt++;
+            }
           }
         }
       }
     }
-  }
-  zlog_debug("in func se_add_x, after delete running lsdb");
-  for(rn=route_top(rt_back);rn;rn=route_next(rn))
-  {
-    if(rn->info!=NULL)
-    {
-      lsa=(struct ospf_lsa *)rn->info;
-      if(lsa->data->type==OSPF_AS_EXTERNAL_LSA)
-      {
-        ase=(struct as_external_lsa *)lsa->data;
-        lsa_p.u.prefix4.s_addr=ase->header.id.s_addr;
-        lsa_p.prefixlen=ip_masklen(ase->mask);
-        if(prefix_match(se_prefix,&lsa_p))
-        {
-          //delete lsa
-          //modify to maxage
-          lsa->data->ls_age=htons (OSPF_LSA_MAXAGE);
-          //timer on maxage timer
-          ospf_lsa_maxage (ospf, lsa);
-        }
-      }
-    }
-  }
-  zlog_debug("in func se_add_x, after delete backup lsdb");
+  // add new route
   struct se_ase_info *p;
-  struct ospf_interface *oi;
-  struct in_addr peer_addr;
-  char peer_str[20];
-  peer_addr.s_addr=0;
-
-  for(ALL_LIST_ELEMENTS(ospf->oiflist,node,nnode,oi))
-  {
-    if(oi->type==OSPF_IFTYPE_INTEROA)
-    {
-      peer_addr.s_addr=oi->if_oa_peer.s_addr;
-      sprintf(peer_str,"%s",inet_ntoa(peer_addr));
-    }
-  }
-
   for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list,node,nnode,p))
   {
     for(int i=0;i<p->x_count;++i)
@@ -10907,39 +10888,78 @@ DEFUN(se_add_x,
     }
     list_delete_all_node(p->ase_list);
     gen_se_ase(p);
-    zlog_debug("in func se_add_x, after gen_se_ase p->router-id=%x",ntohl(p->router_id.s_addr));
+    if(MY_DEBUG)
+      zlog_debug("in func se_add_x, after gen_se_ase p->router-id=%x",ntohl(p->router_id.s_addr));
     for(ALL_LIST_ELEMENTS(p->ase_list,node1,nnode1,lsa))
     {
       lsa1=ospf_lsa_dup(lsa);
       lsa1->lsdb=ospf->lsdb;
       lsa1->area=NULL;
       ospf_lsa_install(ospf,NULL,lsa1);
-      if(p->router_id.s_addr==ospf->router_id_static.s_addr)
+      if(p->router_id.s_addr==ospf->router_id_static.s_addr && peer_enable)
       {
-        sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id),peer_str);
-        zlog_debug("in func se_add_x,p->id=%x,cmd_route=%s",p->router_id.s_addr,cmd_route);
-        system(cmd_route);
+        sprintf(cmd_route,"ip route add %s/16 via %s",inet_ntoa(lsa->data->id), peer_oa_str_static);
+        if(MY_DEBUG)
+          zlog_debug("in func se_add_x,p->id=%x,cmd_route=%s",p->router_id.s_addr,cmd_route);
+        if(system(cmd_route) == -1)
+          zlog_debug("cmd_route fail\n");
         predictable_ase_cnt++;
       }
     }
-    zlog_debug("in func se_add_x, after lsa_dup install");
+    if(MY_DEBUG)
+      zlog_debug("in func se_add_x, after lsa_dup install");
   }
-  zlog_debug("after se_add_x, predictable_ase_cnt=%d",predictable_ase_cnt);
-  ospf_spf_calculate_schedule(ospf);
-  return CMD_SUCCESS;
-}
 
-DEFUN(test_system,
-      test_system_cmd,
-      "test_system STRING",
-      "test_system\n")
-{
-  char string[50];
-  sprintf(string,"echo %s > /home/wyc/test_system.txt",argv[0]);
-  
-  system(string);
+  if(MY_DEBUG)
+    zlog_debug("after se_add_x, predictable_ase_cnt = %d",predictable_ase_cnt);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+  // station operation
+  // remove old route
+  remove_inside_oa_defailt(1, 1);
+  if(MY_DEBUG)
+    zlog_debug("in se_add_x, remove default 1, predictable_ase_cnt = %d", predictable_ase_cnt);
+  remove_outside_oa_default(1, 2);
+  if(MY_DEBUG)
+    zlog_debug("in se_add_x, remove default 2, predictable_ase_cnt = %d", predictable_ase_cnt);
+#endif
+  // calc new state
+  station_info_curr.xadd = (station_info_curr.xadd + 1) % station_info_curr.P;
+  // ifconfig here
+  // 本节点现在位于的地理服务域
+  int my_x = (station_info_curr.x0 + station_info_curr.xadd) % station_info_curr.P;
+  int my_y = (station_info_curr.y0 - (station_info_curr.yadd + station_info_curr.k0) / station_info_curr.k) % station_info_curr.n;
+  if(my_y < 0)
+    my_y += station_info_curr.n;
+  sprintf(cmd_route, "ifconfig %s 10.%d.%d.1/24", if_se_name, my_x, my_y);
+  if(system(cmd_route) == -1)
+    zlog_debug("cmd_ifconfig fail\n");
+  predictable_ase_cnt+=2;
+  if(MY_DEBUG)
+    zlog_debug("in se_add_x, ifconfig = %s, predictable_ase_cnt = %d", cmd_route, predictable_ase_cnt);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+  check_oa_station();
+  // calc new route
+  if(default_info.curr_stat >= 0)
+    gen_myself_default_route(1);
+  if(default_info.curr_stat >= -1)
+    gen_inside_oa_default_route();
+  else {
+    load_outside_oa_default(1, 2);
+  }
+  if(MY_DEBUG)
+    zlog_debug("in se_add_x, after gen new default route, predictable_ase_cnt = %d", predictable_ase_cnt);
+#endif
+  modify_all_lsa_tag();
+  del_asel_dr_outside();
+  // recalcate routes
+  ospf_spf_calculate_schedule(ospf);
+  if(MY_DEBUG)
+    zlog_debug("in se_add_x, end, predictable_ase_cnt = %d", predictable_ase_cnt);
   return CMD_SUCCESS;
-}
+} // end add_x
+
+
+static void default_info_init(void);
 
 DEFUN(load_station,
       load_station_cmd,
@@ -10948,8 +10968,764 @@ DEFUN(load_station,
 {
   DATA_INFO_STR data_info_str;
   fileToMatrix_str(argv[0],&data_info_str);
-
+  station_info_curr.n = atoi(data_info_str.matrix[0][0]);
+  station_info_curr.P = atoi(data_info_str.matrix[0][1]);
+  station_info_curr.k = atoi(data_info_str.matrix[0][2]);
+  station_info_curr.p_oa = atoi(data_info_str.matrix[0][3]);
+  station_info_curr.x0 = atoi(data_info_str.matrix[1][0]);
+  station_info_curr.y0 = atoi(data_info_str.matrix[1][1]);
+  station_info_curr.k0 = atoi(data_info_str.matrix[1][2]);
+  station_info_curr.station_number = atoi(data_info_str.matrix[2][0]);
+  // station_info_curr.xadd = 0;
+  // station_info_curr.yadd = 0;
+  for(int i=0;i<station_info_curr.station_number;++i)
+  {
+    station_info_curr.station[i][0] = atoi(data_info_str.matrix[3+i][0]);
+    station_info_curr.station[i][1] = atoi(data_info_str.matrix[3+i][1]);
+    station_info_curr.station[i][2] = atoi(data_info_str.matrix[3+i][2]);
+    station_info_curr.station_enable[i] = 1;
+    if(MY_DEBUG)
+      zlog_debug("%d,%d,%d", station_info_curr.station[i][0], station_info_curr.station[i][1], station_info_curr.station[i][2]);
+  }
+  // for asel-dr
+  int my_id = station_info_curr.x0 * station_info_curr.n + station_info_curr.y0;
+  int satellite_per_oa = station_info_curr.p_oa * station_info_curr.n;
+  station_info_curr.min_id_oa = (my_id / satellite_per_oa) * satellite_per_oa;
+  station_info_curr.max_id_oa = station_info_curr.min_id_oa + satellite_per_oa - 1;
+  int mod = station_info_curr.x0 % station_info_curr.p_oa;
+  if(mod == 0 && station_info_curr.x0 != 0)
+    myself_is_left = 1; 
+  else if(mod == station_info_curr.p_oa - 1 && station_info_curr.x0 != station_info_curr.P - 1)
+    myself_is_right = 1;
+  if(MY_DEBUG)
+    zlog_debug("load station success, min_id_oa = %d, max_id_oa = %d, myself_is_left = %d, is_right = %d", station_info_curr.min_id_oa, station_info_curr.max_id_oa, myself_is_left, myself_is_right);
+  default_info_init();
   return CMD_SUCCESS;
+}
+
+static inline int between(int t, int l, int r, int lm, int rm)
+{
+  if(l <= r)
+  {
+    return (l <= t && t <= r);
+  }
+  else
+  {
+    return (l <= t && t <= rm) || (lm <= t && t <= r);
+  }
+}
+
+// 如果自己在地面站上方，返回对应下标。如果OA内有地面站，返回-1。都没有，返回-2
+static void check_oa_station()
+{
+  default_info.mx = 0;
+  default_info.curr_stat = -3;
+  default_info.left_cnt = 0;
+  default_info.right_cnt = 0;
+  int myoffset = station_info_curr.x0 % station_info_curr.p_oa;
+
+  // 本OA第一条轨道地理服务域的x值
+  int fisrt_orbit_x = (station_info_curr.x0 - myoffset + station_info_curr.xadd) % station_info_curr.P;
+
+  // 本节点现在位于的地理服务域
+  int my_x = (station_info_curr.x0 + station_info_curr.xadd) % station_info_curr.P;
+  int my_y = (station_info_curr.y0 - (station_info_curr.yadd + station_info_curr.k0) / station_info_curr.k) % station_info_curr.n;
+  if(my_y < 0)
+    my_y += station_info_curr.n;
+  // 找出本OA内部当前是否有地面站
+  int flag = 0;
+  for(int i=0; i<station_info_curr.p_oa;++i)
+  {
+    int curr_x = (fisrt_orbit_x + i) % station_info_curr.P;
+    for(int j=0; j<station_info_curr.station_number; ++j)
+    {
+      // 跳过不可用的地面站
+      if(station_info_curr.station_enable[j] == 0){
+        if(MY_DEBUG)
+          zlog_debug("station %d is fail 1", j);
+        continue;
+      }
+      if(station_info_curr.station[j][0] == curr_x)
+      {
+        // 如果当前节点位于地面站之上
+        if(my_x == station_info_curr.station[j][0] && my_y == station_info_curr.station[j][1])
+        {
+          default_info.curr_stat = j;
+        }
+        // 本节点不在地面站上方，但是OA内部其他节点位于该地面站上方
+        else
+        {
+          // 计算当前位于地面站之上的区域内卫星的router_id
+          flag = 1;
+          // calc the begin position of the satellite which is now on this station
+          int begin_x = (station_info_curr.station[j][0] - station_info_curr.xadd) % station_info_curr.P;
+          int begin_y = (station_info_curr.station[j][1] + (station_info_curr.yadd + station_info_curr.k0) / station_info_curr.k) % station_info_curr.n;
+          if(begin_x < 0)
+            begin_x += station_info_curr.P;
+          // calc the constellation position x,y of the satellite which is now on this station 
+          int constellation_x = begin_x;
+          int constellation_y = (begin_y + begin_x / station_info_curr.k) % station_info_curr.n; 
+          default_info.router_id_info[default_info.mx] = constellation_x * station_info_curr.n + constellation_y;
+          if(MY_DEBUG)
+            zlog_debug("begin_x = %d, begin_y = %d, constellation_x = %d, y = %d", begin_x, begin_y, constellation_x, constellation_y);
+          default_info.mx++;
+        }
+      }
+    }
+  }
+  if(MY_DEBUG)
+    zlog_debug("in func check_oa_station, curr_stat = %d", default_info.curr_stat);
+
+  // 计算左右地面站的数量
+  // l1, r1指的是左侧两个边界，r1, r2指的是右侧的两个边界
+  int l1_orbit_x = station_info_curr.xadd % station_info_curr.P;
+  int r1_orbit_x = fisrt_orbit_x - 1 >= 0 ? fisrt_orbit_x -1 : station_info_curr.P - 1;
+  int l2_orbit_x = (fisrt_orbit_x + station_info_curr.p_oa) % station_info_curr.P;
+  int r2_orbit_x = (station_info_curr.P - 1 + station_info_curr.xadd) % station_info_curr.P;
+  
+  int first_oa = 0;
+  int last_oa = 0;
+  if(station_info_curr.x0 - myoffset == 0)
+    first_oa = 1;
+  if(station_info_curr.x0 - myoffset + station_info_curr.p_oa == station_info_curr.P)
+    last_oa = 1;
+  if(MY_DEBUG)
+    zlog_debug("l1 = %d, r1 = %d, l2 = %d, r2 = %d, first_orbit_x = %d, first_oa = %d, last_oa = %d", l1_orbit_x, r1_orbit_x, l2_orbit_x, r2_orbit_x, fisrt_orbit_x, first_oa, last_oa);
+  for(int i = 0; i < station_info_curr.station_number; ++i)
+  {
+    if(station_info_curr.station_enable[i] == 0){
+      if(MY_DEBUG)
+        zlog_debug("station %d is fail 2", i);
+      continue;
+    }
+    if(MY_DEBUG)
+      zlog_debug("curr_station_x = %d", station_info_curr.station[i][0]);
+    if(!first_oa && between(station_info_curr.station[i][0], l1_orbit_x, r1_orbit_x, 0, station_info_curr.P -1))
+    {
+      default_info.left_cnt++;
+      if(MY_DEBUG)
+        zlog_debug("left_cnt++ = %d", default_info.left_cnt);
+    }
+    else if(!last_oa && between(station_info_curr.station[i][0], l2_orbit_x, r2_orbit_x, 0, station_info_curr.P -1))
+    {
+      default_info.right_cnt++;
+      if(MY_DEBUG)
+        zlog_debug("right_cnt++ = %d", default_info.right_cnt);
+    }
+  }
+  if(MY_DEBUG)
+    zlog_debug("left_cnt = %d, right_cnt = %d\n", default_info.left_cnt, default_info.right_cnt);
+  
+  if(default_info.curr_stat >= 0)
+    return;
+  if(flag == 0)
+  {
+    default_info.curr_stat = -2;
+  }
+  else
+  {
+    default_info.curr_stat = -1;
+    for(int i=0; i<default_info.mx; ++i)
+    {
+      if(MY_DEBUG)
+        zlog_debug("in func check_oa_station, router_id[%d] = %d", i, default_info.router_id_info[i]);
+    }
+  }
+  if(MY_DEBUG)
+    zlog_debug("in func check_oa_station after, curr_stat = %d", default_info.curr_stat);
+}
+
+static void default_info_init()
+{
+  default_info.curr_stat = -3;
+  default_info.self_default_route = NULL;
+  // no del function for this two list
+  default_info.inside_oa_default_route = list_new();
+  default_info.outside_oa_default_route[0] = list_new();
+  default_info.outside_oa_default_route[1] = list_new();
+  default_info.outside_oa_default_route_backup[0] = list_new();
+  default_info.outside_oa_default_route_backup[1] = list_new();
+}
+
+static struct ospf_lsa *create_default_route(struct in_addr adv_router)
+{
+    struct ospf *ospf = ospf_lookup();
+    struct ospf_lsa *default_ase;
+    default_ase = ospf_lsa_new();
+    struct stream *s = stream_new(OSPF_MAX_LSA_SIZE);
+    struct lsa_header *lsah = (struct lsa_header *)STREAM_DATA(s);
+    u_int32_t s_addr_h;
+    lsah->ls_age = htons (OSPF_LSA_INITIAL_AGE);
+    lsah->options = 2;
+    lsah->type = 5;
+    s_addr_h = 0;
+    lsah->id.s_addr = htonl(s_addr_h);
+    lsah->adv_router.s_addr = adv_router.s_addr;
+    lsah->ls_seqnum = htonl(OSPF_INITIAL_SEQUENCE_NUMBER);
+    lsah->length = htons(36);
+    stream_forward_endp (s, OSPF_LSA_HEADER_SIZE);
+    //stream put will change to net seq
+    //mask 
+    stream_putl(s,0x00000000);
+    //tos
+    stream_putc(s,(char)0);
+    //cost
+    stream_putc(s,(char)0);
+    stream_putc(s,(char)0);
+    stream_putc(s,(char)20);
+    //forward_addr
+    stream_putl(s,0);
+    //route_tag
+    stream_putl(s,0);
+    lsah->checksum = ospf_lsa_checksum(lsah);
+    default_ase->data = ospf_lsa_data_new(36);
+    memcpy(default_ase->data, STREAM_DATA (s), 36);
+    ospf_lsa_is_self_originated(ospf, default_ase);
+
+    
+    // lsah->checksum = 0;
+    //default_ase->lock = 1;
+
+    stream_free(s);
+    s = NULL;
+    // for debug
+    struct as_external_lsa *ase = (struct as_external_lsa *)default_ase->data;
+    if(MY_DEBUG)
+      zlog_debug("default: ase->id = %x, adv = %x, mask = %x, checksum = %x", ase->header.id.s_addr, ase->header.adv_router.s_addr, ase->mask.s_addr, lsah->checksum);
+    return default_ase;
+}
+
+static void install_lsa_running(struct ospf_lsa *lsa)
+{
+    struct ospf* ospf = ospf_lookup();
+    lsa->lsdb = ospf->lsdb;
+    ospf_lsdb_add(ospf->lsdb, lsa);
+}
+
+static void install_lsa_backup(struct ospf_lsa *lsa)
+{
+  lsa->lsdb = backup_lsdb;
+  ospf_lsdb_add(backup_lsdb, lsa);
+}
+
+static void gen_myself_default_route(int predictable)
+{
+  struct ospf *ospf = ospf_lookup();
+  int stat = default_info.curr_stat;
+  struct ospf_lsa *default_ase = create_default_route(ospf->router_id_static);
+  install_lsa_running(default_ase);
+  // add static default route
+  char cmd_route[50];
+  sprintf(cmd_route,"ip route add default via 10.%d.%d.%d",station_info_curr.station[stat][0], station_info_curr.station[stat][1], station_info_curr.station[stat][2]);
+  if(MY_DEBUG)
+    zlog_debug("in gen_myself_default_route, cmd_route=%s", cmd_route);
+  if(system(cmd_route) == -1)
+    zlog_debug("cmd_route fail\n");
+  // add in default info
+  default_info.self_default_route = default_ase;
+  // 是否需要? 
+  if(predictable)
+    predictable_ase_cnt++;
+} 
+
+static void gen_inside_oa_default_route()
+{
+    struct ospf* ospf = ospf_lookup();
+    if(MY_DEBUG)
+      zlog_debug("mx = %d", default_info.mx);
+    // gen static route in nodes inside as
+    for(int i = 0; i < default_info.mx; ++i)
+    {
+      struct in_addr adv_router;
+      adv_router.s_addr = htonl((20 << 24) + default_info.router_id_info[i]);
+      if(MY_DEBUG)
+        zlog_debug("adv_router.s_addr = %x", adv_router.s_addr);
+      // skip myself when stat >=0
+      if(adv_router.s_addr == ospf->router_id_static.s_addr)
+        continue;
+      struct ospf_lsa *default_ase = create_default_route(adv_router);
+      install_lsa_running(default_ase);
+      // add in default_info.inside_oa_default_route
+      listnode_add(default_info.inside_oa_default_route, default_ase);
+    }
+}
+
+static void gen_outside_oa_default_route()
+{
+  // gen default routes in boader, use se_ase_info
+  int myoffset = station_info_curr.x0 % station_info_curr.p_oa;
+  // this is the first orbit x in constellation
+  int fisrt_orbit_x = station_info_curr.x0 - myoffset;
+  int end_orbit_x = station_info_curr.x0 - myoffset + station_info_curr.p_oa -1;
+  int x[2];
+  x[0] = fisrt_orbit_x;
+  x[1] = end_orbit_x;
+  // gen_left_side for j = 0; right_side for j = 1
+  for(int j = 0; j < 2; ++j)
+    for(int i = 0; i < station_info_curr.n; ++i)
+    {
+      if(j == 0 && fisrt_orbit_x == 0)
+        continue;
+      if(j == 1 && end_orbit_x == station_info_curr.P - 1)
+        continue;
+      int curr_id = x[j] * station_info_curr.n + i; 
+      if(MY_DEBUG)
+        zlog_debug("x[%d] = %d, curr_id = %d\n", j, x[j], curr_id);
+      struct in_addr adv_router;
+      adv_router.s_addr = htonl((20 << 24) + curr_id);
+      struct ospf_lsa *default_ase = create_default_route(adv_router);
+      // add phase info
+      struct se_ase_info *p;
+      struct listnode *node, *nnode;
+      for(ALL_LIST_ELEMENTS(se_ase_info_list_cur->se_ase_list, node, nnode, p))
+      {
+        if(p->router_id.s_addr == adv_router.s_addr)
+        {
+          default_ase->links_count = 1;
+          default_ase->phase_count = p->phase_count;
+          default_ase->phase_matrix = calloc(1, sizeof(int *));
+          default_ase->phase_matrix[0] = calloc(p->phase_count, sizeof(int));
+          for(int j = 0; j < p->phase_count; ++j)
+          {
+            default_ase->phase_matrix[0][j] = p->phase_vector[j];
+          }       
+          break;
+        }
+      }        
+      // add in default_info.
+      listnode_add(default_info.outside_oa_default_route_backup[j], default_ase);
+      // add in backup_lsdb
+      install_lsa_backup(default_ase);
+    }
+}
+
+static int check_need_outside_oa_default()
+{
+  if(default_info.curr_stat == -2)
+    return 1;
+  else
+    return 0;
+}
+
+
+// gen_default_route and insert into list
+static void gen_default_route()
+{
+  if(station_info_curr.station_number == 0)
+  {
+    if(MY_DEBUG)
+      zlog_debug("in gen_default_route, no station");
+    return;
+  }
+  check_oa_station();
+  int stat = default_info.curr_stat;
+
+  gen_outside_oa_default_route();
+
+  if(stat >= 0)
+  {
+    gen_myself_default_route(1);
+    gen_inside_oa_default_route();
+  }
+  // stat >=0 or stat = -1, need gen_route for inside nodes 
+  // when stat >=0, we also gen default for other satellites on station inside OA
+  else if(stat == -1 || stat >= 0)
+  {
+    gen_inside_oa_default_route();
+  }
+  else if(stat == -2)
+  {
+    load_outside_oa_default(1, 2);
+  }
+}
+
+static int gen_default_route_helper(struct thread * thread)
+{
+  gen_default_route();
+  return 0;
+}
+
+static void remove_inside_oa_defailt(int predictable, int ifconfig)
+{
+  struct ospf *ospf = ospf_lookup();
+  int stat = default_info.curr_stat;
+  // remove inside OA routes myself
+  if(stat >=0)
+  {    
+    //zlog_debug("test1: discard lsa->id = %x, adv = %x", lsa->data->id.s_addr, lsa->data->adv_router.s_addr);
+    // 不可预测时，此处lsa不能删除，否则zebra_read后找不到对应的lsa进行洪泛
+    if(predictable){
+      struct ospf_lsa *lsa = default_info.self_default_route;
+      lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
+      ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+      ospf_lsdb_delete (lsa->lsdb, lsa);
+      default_info.self_default_route = NULL;
+    }
+    // del static default route
+    if(!ifconfig)
+    {
+      // 这里的操作并没有效果，因为ifconfig已经直接使得ip地址发生变化时，zebra就会发来消息删除掉这条路由, 反而使得predictable_ase_cnt多增加了一条无法去掉
+      char cmd_route[50];
+      sprintf(cmd_route,"ip route del default via 10.%d.%d.%d",station_info_curr.station[stat][0], station_info_curr.station[stat][1], station_info_curr.station[stat][2]);
+      if(MY_DEBUG)
+        zlog_debug("in remove_inside_oa_defailt, cmd_route=%s", cmd_route);
+      if(system(cmd_route) == -1)
+        zlog_debug("cmd_route fail\n");
+      if(predictable)
+        predictable_ase_cnt++;   
+    } 
+    else
+    {
+      predictable_ase_cnt++;
+    }
+  }
+  // remove inside OA routes of other nodes
+  if(stat == -1 || stat >= 0)
+  {
+    if(default_info.mx != 0)
+    {
+      struct listnode *node, *nnode;
+      struct ospf_lsa *lsa;
+      for(ALL_LIST_ELEMENTS(default_info.inside_oa_default_route, node, nnode, lsa))
+      {
+        //zlog_debug("test2: discard lsa->id = %x, adv = %x", lsa->data->id.s_addr, lsa->data->adv_router.s_addr);        
+        lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
+        ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+        ospf_lsdb_delete (lsa->lsdb, lsa);
+      }
+      list_delete_all_node(default_info.inside_oa_default_route);
+      default_info.mx = 0;
+    }
+  }
+}
+// side:  0: left; 1: right; 2: both and consider leftcnt/rightcnt
+static void load_outside_oa_default(int predictable, int side)
+{
+  // when this oa has station inside, dont need ouside oa default ase
+  if(!check_need_outside_oa_default())
+  {
+    return;
+  }
+  if(MY_DEBUG)
+    zlog_debug("load_outside_oa_default, stat = %d", default_info.curr_stat);
+  struct listnode *node, *nnode;
+  struct ospf_lsa *lsa;
+  struct ospf* ospf = ospf_lookup();
+  for(int j=0; j<2; ++j)
+  {
+    if(side == 2)
+    {
+      if(j == 0 && default_info.left_cnt == 0)
+        continue;
+      if(j == 1 && default_info.right_cnt == 0)
+        continue;
+    }
+    if((side == 0 && j == 1) || (side == 1 && j == 0))
+    {
+      if(MY_DEBUG)
+        zlog_debug("side = %d, j =%d, continue", side, j);
+      continue;
+    }
+    for(ALL_LIST_ELEMENTS(default_info.outside_oa_default_route_backup[j], node, nnode, lsa))
+    {
+      struct ospf_lsa *new = ospf_lsa_dup(lsa);
+      install_lsa_running(new);
+      // add in list
+      listnode_add(default_info.outside_oa_default_route[j], new);
+      // TODO: for ioa_leaving, don't add
+      if(new->data->adv_router.s_addr == ospf->router_id_static.s_addr && peer_enable)
+      {
+        char cmd_route[50];
+        sprintf(cmd_route, "ip route add default via %s", peer_oa_str_static);
+        if(MY_DEBUG)
+          zlog_debug("in func load_outside_oa_default cmd_route:%s", cmd_route);
+        if(system(cmd_route) == -1)
+          zlog_debug("cmd_route fail");
+        // add preditable_ase_cnt to prevent broadcast predictable as-external-lsa
+        if(predictable)
+          predictable_ase_cnt++;      
+      }
+    }
+  }
+}
+
+static void remove_outside_oa_default(int predictable, int side)
+{
+  struct listnode *node, *nnode;
+  struct ospf_lsa *lsa;
+  struct ospf* ospf = ospf_lookup();
+  for(int j = 0; j < 2; ++j)
+  {
+    if((side == 0 && j == 1) || (side == 1 && j == 0))
+    {
+      if(MY_DEBUG)
+        zlog_debug("side = %d, j = %d, continue", side, j);
+      continue;
+    }
+    if(!list_isempty(default_info.outside_oa_default_route[j]))
+    {
+      for(ALL_LIST_ELEMENTS(default_info.outside_oa_default_route[j], node, nnode, lsa))
+      {
+        // zlog_debug("test3: discard lsa->id = %x, adv = %x", lsa->data->id.s_addr, lsa->data->adv_router.s_addr);
+        if(lsa->data->adv_router.s_addr == ospf->router_id_static.s_addr && peer_enable)
+        {
+          char cmd_route[50];
+          sprintf(cmd_route, "ip route del default via %s", peer_oa_str_static);
+          if(MY_DEBUG)
+            zlog_debug("in func remove_outside_oa_default, cmd_route:%s", cmd_route);
+          if(system(cmd_route) == -1)
+            zlog_debug("cmd_route fail");
+          // add preditable_ase_cnt to prevent broadcast predictable as-external-lsa
+          if(predictable)
+            predictable_ase_cnt++;          
+        }
+        //modify to maxage
+        lsa->data->ls_age=htons (OSPF_LSA_MAXAGE);
+        //timer on maxage timer
+        ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+        ospf_lsdb_delete (lsa->lsdb, lsa);  
+        //zlog_debug("test6: after ospf lsdb delete");
+      }
+      //zlog_debug("test7: %d", j);
+      list_delete_all_node(default_info.outside_oa_default_route[j]);
+      //zlog_debug("test 8");
+    }
+  }
+  if(MY_DEBUG)
+    zlog_debug("remove_outside_oa_default success");
+}
+
+
+void outside_oa_default_operation(int add, int predictable)
+{
+  char cmd_route[50];
+  // 判断我自己是左侧还是右侧，然后判断left_cnt和right_cnt是否为0
+  if(add && default_info.curr_stat == -2 && ((myself_is_left && default_info.left_cnt != 0) || (myself_is_right && default_info.right_cnt != 0)))
+  {
+    sprintf(cmd_route, "ip route add default via %s", peer_oa_str_static);
+    if(system(cmd_route) == -1)
+      zlog_debug("cmd_route fail in outside_oa_default_operation");
+    if(predictable)
+      predictable_ase_cnt++;
+  }
+  if(!add && default_info.curr_stat == -2 && ((myself_is_left && default_info.left_cnt != 0) || (myself_is_right && default_info.right_cnt != 0)))
+  {
+    sprintf(cmd_route, "ip route del default via %s", peer_oa_str_static);
+    if(system(cmd_route) == -1)
+      zlog_debug("cmd_route fail in outside_oa_default_operation");
+    if(predictable)
+      predictable_ase_cnt++;
+  }
+  if(MY_DEBUG)
+    zlog_debug("in outside_oa_default_route, cmd_route = %s, predictable_ase_cnt = %d", cmd_route, predictable_ase_cnt);
+  // if !predictable, the as-external-lsa will be broadcast because extern-info update 
+}
+
+static int
+self_asel_dr_recalc_helper ()
+{
+  if(MY_DEBUG)
+    zlog_debug("in asel_dr_recalc_helper, 0");
+  struct ospf *ospf = ospf_lookup();
+  // recalc default route
+  remove_inside_oa_defailt(0, 0);
+  if(MY_DEBUG)
+    zlog_debug("in asel_dr_recalc_helper, remove default 1");
+  remove_outside_oa_default(1, 2);
+  if(MY_DEBUG)
+    zlog_debug("in asel_dr_recalc_helper, remove default 2");
+  check_oa_station();
+  // calc new route
+  if(default_info.curr_stat >= 0)
+    gen_myself_default_route(0);
+  if(default_info.curr_stat >= -1)
+    gen_inside_oa_default_route();
+  else
+    load_outside_oa_default(1, 2);
+  ospf_spf_calculate_schedule(ospf);
+  return 0;
+}
+
+DEFUN(station_fail,
+      station_fail_cmd,
+      "station_fail",
+      "station_fail\n")
+{
+  // 只发送lsa，邻居状态不变
+  // struct ospf *ospf = ospf_lookup();
+  struct ospf_lsa *lsa = default_info.self_default_route;
+  int stat = default_info.curr_stat;
+  if(MY_DEBUG)
+    zlog_debug("in func station_fail, stat = %d, lsa = %p", stat, lsa);
+  if(lsa != NULL && stat >= 0 && station_info_curr.station_enable[stat] == 1)
+  {
+    station_info_curr.station_enable[stat] = 0;
+    if(MY_DEBUG)
+      zlog_debug("in station_fail, station %d change to fail", stat);
+    // lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
+    // ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+    // ospf_lsdb_delete (lsa->lsdb, lsa);
+    // del static default route and send LSU
+    // char cmd_route[50];
+    // sprintf(cmd_route,"ip route del default via 10.%d.%d.%d",station_info_curr.station[stat][0], station_info_curr.station[stat][1], station_info_curr.station[stat][2]);
+    // if(MY_DEBUG)
+    //   zlog_debug("in station_fail, cmd_route=%s", cmd_route);
+    // if(system(cmd_route) == -1)
+    //   zlog_debug("cmd_route fail\n");  
+    self_asel_dr_recalc_helper();
+  }
+  return CMD_SUCCESS;
+}
+
+DEFUN(station_recover,
+      station_recover_cmd,
+      "station_recover",
+      "station_recover\n")
+{
+  // 只发送lsa，邻居状态不变
+  struct ospf *ospf = ospf_lookup();
+  // modify ????? TODO
+  // int stat = default_info.curr_stat;
+  // if(stat >= 0 && station_info_curr.station_enable[stat] == 0)
+  // {
+  //   station_info_curr.station_enable[stat] = 1;
+  //   struct ospf_lsa *default_ase = create_default_route(ospf->router_id_static);
+  //   install_lsa_running(default_ase);
+  //   // add static default route
+  //   char cmd_route[50];
+  //   sprintf(cmd_route,"ip route add default via 10.%d.%d.%d",station_info_curr.station[stat][0], station_info_curr.station[stat][1], station_info_curr.station[stat][2]);
+  //   if(MY_DEBUG)
+  //     zlog_debug("in station_recover, cmd_route=%s", cmd_route);
+  //   if(system(cmd_route) == -1)
+  //     zlog_debug("cmd_route fail\n");
+  //   // add in default info
+  //   default_info.self_default_route = default_ase;
+  // }
+    // 本节点现在位于的地理服务域
+  int my_x = (station_info_curr.x0 + station_info_curr.xadd) % station_info_curr.P;
+  int my_y = (station_info_curr.y0 - (station_info_curr.yadd + station_info_curr.k0) / station_info_curr.k) % station_info_curr.n;
+  if(my_y < 0)
+    my_y += station_info_curr.n;
+  for(int i = 0; i < station_info_curr.station_number; ++i)
+  {
+    if(station_info_curr.station[i][0] == my_x && station_info_curr.station[i][1] == my_y && station_info_curr.station_enable[i] == 0)
+    {
+      station_info_curr.station_enable[i] = 1;
+      struct ospf_lsa *default_ase = create_default_route(ospf->router_id_static);
+      install_lsa_running(default_ase);
+      default_info.self_default_route = default_ase;
+      if(MY_DEBUG)
+        zlog_debug("in func station_recover, station %d recover", i);
+      // char cmd_route[50];
+      // sprintf(cmd_route,"ip route add default via 10.%d.%d.%d",station_info_curr.station[i][0], station_info_curr.station[i][1], station_info_curr.station[i][2]);
+      // if(MY_DEBUG)
+      //   zlog_debug("in station_recover, cmd_route=%s", cmd_route);
+      self_asel_dr_recalc_helper();
+      break;
+    }
+  }
+  return CMD_SUCCESS;
+}
+
+void recheck_station(struct ospf_lsa *old, struct ospf_lsa *new)
+{
+  // 从default_info中删除旧的lsa指针
+  struct listnode *lnode = NULL;
+  if((lnode = listnode_lookup(default_info.inside_oa_default_route, old)) != NULL)
+  {
+    if(MY_DEBUG)
+      zlog_debug("in func recheck_station, delete old node in default_info.inside_oa_default_route");
+    listnode_delete(default_info.inside_oa_default_route, old);
+  }
+  // 如果new满足条件，需要加入list
+  if(!is_asel_dr_outside_oa(new))
+  {
+    listnode_add(default_info.inside_oa_default_route, new);
+  }
+  // 写出该节点当前的地理服务域，然后判断是哪个地面站的状态发生了变化
+  int router_id = htonl(new->data->adv_router.s_addr) & 0xffffff;
+  int begin_x = router_id / station_info_curr.n;
+  int begin_y = router_id % station_info_curr.n - begin_x / station_info_curr.k;
+  if(begin_y < 0)
+    begin_y += station_info_curr.n;
+  int curr_x = (begin_x + station_info_curr.xadd) % station_info_curr.P;
+  int curr_k0 = curr_x % station_info_curr.k;
+  int curr_y = (begin_y - (station_info_curr.yadd + curr_k0) / station_info_curr.k) % station_info_curr.n;
+  if(curr_x < 0)
+    curr_y += station_info_curr.n;
+  if(MY_DEBUG)
+    zlog_debug("in func recheck_station, router_id = %d, begin_x = %d, begin_y = %d, curr_x = %d, curr_y = %d", router_id, begin_x, begin_y, curr_x, curr_y);
+  int change_flag = 0;
+  for(int i = 0; i < station_info_curr.station_number; ++i)
+  {
+    if(station_info_curr.station[i][0] == curr_x && station_info_curr.station[i][1] == curr_y) {
+      if(IS_LSA_MAXAGE(new) && station_info_curr.station_enable[i] == 1)
+      {
+        station_info_curr.station_enable[i] = 0;
+        change_flag = 1;
+        if(MY_DEBUG)
+          zlog_debug("change station %d to disable", i);
+      } else if ( !IS_LSA_MAXAGE(new) && station_info_curr.station_enable[i] == 0) {
+        station_info_curr.station_enable[i] = 1;
+        change_flag = 1;
+        if(MY_DEBUG)
+          zlog_debug("change station %d to enable", i);
+      }
+    }
+  }
+  // left_cnt和right_cnt有变化的情况需要调整
+  if(change_flag) {
+    int old_left_cnt = default_info.left_cnt;
+    int old_right_cnt = default_info.right_cnt;
+    int old_stat = default_info.curr_stat;
+    check_oa_station();
+    if(old_stat == -2 && default_info.curr_stat != -2)
+    {
+      if(MY_DEBUG)
+        zlog_debug("in recheck station, case 1");
+      // del outside asel-dr
+      remove_outside_oa_default(1, 2);
+    }
+    else if(old_stat != -2 && default_info.curr_stat == -2)
+    {
+      if(MY_DEBUG)
+        zlog_debug("in recheck station, case 2");
+      // add default asel-dr
+      load_outside_oa_default(1, 2);
+    }
+    else if(old_stat == -2 && default_info.curr_stat == -2)
+    {
+      // left 0->!0
+      if(old_left_cnt == 0 && default_info.left_cnt != 0)
+      {
+        if(MY_DEBUG)
+          zlog_debug("in recheck station, case 3");
+        load_outside_oa_default(1, 0);
+      }
+      // left !0->0
+      else if(old_left_cnt != 0 && default_info.left_cnt == 0)
+      {
+        if(MY_DEBUG)
+          zlog_debug("in recheck station, case 4");
+        remove_outside_oa_default(1, 0);
+      }
+      // right 0->!0
+      if(old_right_cnt == 0 && default_info.right_cnt != 0)
+      {
+        if(MY_DEBUG)
+          zlog_debug("in recheck station, case 5");
+        load_outside_oa_default(1, 1);
+      }
+      // right !0->0
+      else if(old_right_cnt != 0 && default_info.right_cnt == 0)
+      {
+        if(MY_DEBUG)
+          zlog_debug("in recheck station, case 6");
+        remove_outside_oa_default(1, 1);
+      }
+    }
+  }
+  ospf_spf_calculate_schedule(ospf_lookup());
 }
 
 void
@@ -10996,11 +11772,6 @@ ospf_vty_show_init (void)
   install_element (ENABLE_NODE,&print_neighbor_cmd);
   install_element (CONFIG_NODE,&print_neighbor_cmd);
 
-
-  install_element (VIEW_NODE,&test_timer_cmd);
-  install_element (ENABLE_NODE,&test_timer_cmd);
-  install_element (CONFIG_NODE,&test_timer_cmd);
-
   install_element (VIEW_NODE,&begin_testing_cmd);
   install_element (ENABLE_NODE,&begin_testing_cmd);
   install_element (CONFIG_NODE,&begin_testing_cmd);
@@ -11026,19 +11797,18 @@ ospf_vty_show_init (void)
   install_element(VIEW_NODE,&add_phase_cmd);
   install_element(ENABLE_NODE,&add_phase_cmd);
   install_element(CONFIG_NODE,&add_phase_cmd);
+  install_element(VIEW_NODE,&add_slot_cmd);
+  install_element(ENABLE_NODE,&add_slot_cmd);
+  install_element(CONFIG_NODE,&add_slot_cmd);
     
-  install_element(VIEW_NODE,&test_is_lsa_recover_cmd);
-  install_element(ENABLE_NODE,&test_is_lsa_recover_cmd);
-  install_element(CONFIG_NODE,&test_is_lsa_recover_cmd);
+  install_element(VIEW_NODE,&test_is_router_lsa_recover_cmd);
+  install_element(ENABLE_NODE,&test_is_router_lsa_recover_cmd);
+  install_element(CONFIG_NODE,&test_is_router_lsa_recover_cmd);
 
   install_element(VIEW_NODE,&print_phase_cmd);
   install_element(ENABLE_NODE,&print_phase_cmd);
   install_element(CONFIG_NODE,&print_phase_cmd);
   
-  install_element(VIEW_NODE,&test_system_cmd);
-  install_element(ENABLE_NODE,&test_system_cmd);
-  install_element(CONFIG_NODE,&test_system_cmd);
-
   /* phase ase cmd*/
   install_element(VIEW_NODE,&ase_output_cmd);
   install_element(ENABLE_NODE,&ase_output_cmd);
@@ -11100,7 +11870,17 @@ ospf_vty_show_init (void)
   install_element(ENABLE_NODE,&begin_running_cmd);
   install_element(CONFIG_NODE,&begin_running_cmd);
 
+  install_element(VIEW_NODE, &load_station_cmd);
+  install_element(ENABLE_NODE, &load_station_cmd);
+  install_element(CONFIG_NODE, &load_station_cmd);
 
+  install_element(VIEW_NODE, &station_fail_cmd);
+  install_element(ENABLE_NODE, &station_fail_cmd);
+  install_element(CONFIG_NODE, &station_fail_cmd);
+
+  install_element(VIEW_NODE, &station_recover_cmd);
+  install_element(ENABLE_NODE, &station_recover_cmd);
+  install_element(CONFIG_NODE, &station_recover_cmd);
 
   /* "show ip ospf" commands. */
   install_element (VIEW_NODE, &show_ip_ospf_cmd);

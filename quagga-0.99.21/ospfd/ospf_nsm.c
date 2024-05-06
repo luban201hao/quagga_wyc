@@ -197,42 +197,47 @@ nsm_should_adj (struct ospf_neighbor *nbr)
 static int
 nsm_packet_received (struct ospf_neighbor *nbr)
 {
+  if(MY_DEBUG)
     zlog_debug("in func nsm_packet_receive,nbr->id=%x",nbr->router_id.s_addr);
-    /* Start or Restart Inactivity Timer. */
-    OSPF_NSM_TIMER_OFF (nbr->t_inactivity);
-  
-    OSPF_NSM_TIMER_ON (nbr->t_inactivity, ospf_inactivity_timer,
-		     nbr->v_inactivity);
+  /* Start or Restart Inactivity Timer. */
+  OSPF_NSM_TIMER_OFF (nbr->t_inactivity);
 
+  OSPF_NSM_TIMER_ON (nbr->t_inactivity, ospf_inactivity_timer,
+        nbr->v_inactivity);
+  if(MY_DEBUG)
     zlog_debug("in func nsm_packet_receive, inactivity timer set ok");
 
-    if (nbr->oi->type == OSPF_IFTYPE_NBMA && nbr->nbr_nbma)
-      OSPF_POLL_TIMER_OFF (nbr->nbr_nbma->t_poll);
+  if (nbr->oi->type == OSPF_IFTYPE_NBMA && nbr->nbr_nbma)
+    OSPF_POLL_TIMER_OFF (nbr->nbr_nbma->t_poll);
 
-    if(nbr->state==NSM_Testing && nbr->testing_flag==NSM_IN_FIRST_TESTING_FLAG)
-    {
+  if(nbr->state==NSM_Testing && nbr->testing_flag==NSM_IN_FIRST_TESTING_FLAG)
+  {
+    if(MY_DEBUG)
       zlog_debug("in nsm_packet_receive,first test,change nbr->testing_flag=NSM_FIRST_TESTING_SUCCESS_FLAG");
-      nbr->testing_flag=NSM_FIRST_TESTING_SUCCESS_FLAG;
-    }
-    else if (nbr->state==NSM_Testing && nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG)
-    {
+    nbr->testing_flag=NSM_FIRST_TESTING_SUCCESS_FLAG;
+  }
+  else if (nbr->state==NSM_Testing && nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG)
+  {
+    if(MY_DEBUG)
       zlog_debug("in nsm_packet_receive,other test, change nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG");
-      nbr->testing_flag=NSM_OTHER_TESTING_SUCCESS_FLAG;      
-    }
+    nbr->testing_flag=NSM_OTHER_TESTING_SUCCESS_FLAG;      
+  }
 
-    if(nbr->state==NSM_INTEROA_TESTING && nbr->testing_flag==NSM_IN_FIRST_TESTING_FLAG)
-    {
+  if(nbr->state==NSM_INTEROA_TESTING && nbr->testing_flag==NSM_IN_FIRST_TESTING_FLAG)
+  {
+    if(MY_DEBUG)
       zlog_debug("in nsm_packet_receive,first test,change nbr->testing_flag=NSM_FIRST_TESTING_SUCCESS_FLAG");
-      nbr->testing_flag=NSM_FIRST_TESTING_SUCCESS_FLAG;
-    }
-    else if (nbr->state==NSM_INTEROA_TESTING && nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG)
-    {
+    nbr->testing_flag=NSM_FIRST_TESTING_SUCCESS_FLAG;
+  }
+  else if (nbr->state==NSM_INTEROA_TESTING && nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG)
+  {
+    if(MY_DEBUG)
       zlog_debug("in nsm_packet_receive,other test, change nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG");
-      nbr->testing_flag=NSM_OTHER_TESTING_SUCCESS_FLAG;      
-    }
-    
+    nbr->testing_flag=NSM_OTHER_TESTING_SUCCESS_FLAG;      
+  }
+  if(MY_DEBUG)
     zlog_debug("in func nsm_packet_receive, 3");
-    return 0;
+  return 0;
 }
 
 static int
@@ -361,10 +366,10 @@ nsm_negotiation_done (struct ospf_neighbor *nbr)
 #endif /* HAVE_OPAQUE_LSA */
 
   if (CHECK_FLAG (nbr->options, OSPF_OPTION_NP))
-    {
-      LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
-	ospf_db_summary_add (nbr, lsa);
-    }
+  {
+    LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
+      ospf_db_summary_add (nbr, lsa);
+  }
 
   if (nbr->oi->type != OSPF_IFTYPE_VIRTUALLINK
       && area->external_routing == OSPF_AREA_DEFAULT)
@@ -385,16 +390,19 @@ nsm_negotiation_done (struct ospf_neighbor *nbr)
 static int
 nsm_exchange_done (struct ospf_neighbor *nbr)
 {
-  zlog_debug("in func nsm_exchange_done");
+  if(MY_DEBUG)
+    zlog_debug("in func nsm_exchange_done");
 
   if (ospf_ls_request_isempty (nbr))
   {
-    zlog_debug("in nsm_exchange_done,ospf_ls_request_isempty (nbr)");
+    if(MY_DEBUG)
+      zlog_debug("in nsm_exchange_done,ospf_ls_request_isempty (nbr)");
     return NSM_Full;
   }
     
   //zlog_debug("in nsm.c, exchange down and send ls request");
   /* Send Link State Request. */
+  // exchangedone之后，发送ls_req报文，向邻居请求不具有的LSA
   ospf_ls_req_send (nbr);
 
   return NSM_Loading;
@@ -474,66 +482,68 @@ nsm_kill_nbr (struct ospf_neighbor *nbr)
 static int 
 nsm_begin_leaving (struct ospf_neighbor *nbr)
 {
-
-
-  zlog_debug("in func nsm_begin_leaving");
+  if(MY_DEBUG)
+    zlog_debug("in func nsm_begin_leaving");
   //OSPF_ISM_TIMER_OFF(nbr->oi->t_hello);
   OSPF_ISM_EVENT_EXECUTE(nbr->oi,ISM_PredictedLinkDown);
   return 0;
 }
 static int 
-nsm_end_leaving (struct ospf_neighbor *nbr)
+nsm_end_testing (struct ospf_neighbor *nbr)
 {
-
-  zlog_debug("in func nsm_end_leaving");
+  if(MY_DEBUG)
+    zlog_debug("in func nsm_end_leaving");
   struct ospf_interface *oi=nbr->oi;
-  
   //test fail in first cycle, send lsa
-  if(nbr->testing_flag==NSM_IN_FIRST_TESTING_FLAG)
+  if(nbr->testing_flag == NSM_IN_FIRST_TESTING_FLAG)
   {
-    zlog_debug("nbr->testing_flag==NSM_IN_TESTING_FLAG");
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_IN_TESTING_FLAG");
     //timer_on linkup!!! ensure link up when link is ok
     ospf_router_lsa_update_area (oi->area);
-    zlog_debug("after send lsa in first test");
+    if(MY_DEBUG)
+      zlog_debug("after send lsa in first test");
     nbr->testing_flag=NSM_FIRST_TESTING_FAIL_FLAG;
     OSPF_NSM_TIMER_ON (nbr->t_test, ospf_predicted_link_up_timer ,nbr->v_test);
     return NSM_Testing;
   }
   //test success in first cycle,don't send lsa
-  else if(nbr->testing_flag==NSM_FIRST_TESTING_SUCCESS_FLAG)
-  {
-    
-    zlog_debug("nbr->testing_flag==NSM_TESTING_SUCCESS_FLAG");
+  else if(nbr->testing_flag == NSM_FIRST_TESTING_SUCCESS_FLAG)
+  {   
+    if(MY_DEBUG) 
+      zlog_debug("nbr->testing_flag==NSM_TESTING_SUCCESS_FLAG");
     spf_change_phase_sub(global_phase);
     OSPF_ISM_EVENT_EXECUTE(oi,ISM_PredictedLinkUp);
-    return NSM_Full;
+    return NSM_Exchange;
   }
   //test fail in cycle>=2,dont send lsa
-  else if(nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG)
+  else if(nbr->testing_flag == NSM_FIRST_TESTING_FAIL_FLAG)
   {
-    zlog_debug("nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG");
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG");
     OSPF_NSM_TIMER_ON (nbr->t_test, ospf_predicted_link_up_timer ,nbr->v_test);
     return NSM_Testing;   
   }
   //test success in cycle>=2,send lsa
-  else if(nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG)
+  else if(nbr->testing_flag == NSM_OTHER_TESTING_SUCCESS_FLAG)
   {
-    zlog_debug("nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG");
-    
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG");
     OSPF_ISM_EVENT_EXECUTE(oi,ISM_PredictedLinkUp);
-    //lsa can't be sent here, nbr->state is still nsm_testing
-    //ospf_router_lsa_update_area (oi->area);
+    // lsa can't be sent here, nbr->state is still nsm_testing, it will update in nsm_change_state
+    // 在状态转换后，再调用LSA更新函数，才能保证其中的链路是正确的, 因此在此处无需进行LSA发送，在nsm_change_state中发送
+    // ospf_router_lsa_update_area (oi->area);
     spf_change_phase_sub(global_phase);
-    return NSM_Full;
+    return NSM_Exchange;
   }
-
   return NSM_Testing;
 }
 
 static int
 nsm_begin_testing(struct ospf_neighbor *nbr)
 {
-  zlog_debug("in func nsm_begin_testing");
+  if(MY_DEBUG)
+    zlog_debug("in func nsm_begin_testing");
   OSPF_ISM_EVENT_EXECUTE(nbr->oi,ISM_BeginTesting);
   nbr->testing_flag=NSM_IN_FIRST_TESTING_FLAG;
   return 0;
@@ -542,60 +552,62 @@ nsm_begin_testing(struct ospf_neighbor *nbr)
 
 //send as-external lsa, and spf
 static int 
-nsm_end_leaving_oa (struct ospf_neighbor *nbr)
+nsm_end_testing_oa (struct ospf_neighbor *nbr)
 {
-
-  zlog_debug("in func nsm_end_leaving_oa");
-  struct ospf_interface *oi=nbr->oi;
-  struct ospf *ospf=ospf_lookup();
+  if(MY_DEBUG)
+    zlog_debug("in func nsm_end_leaving_oa");
+  struct ospf_interface *oi = nbr->oi;
+  struct ospf *ospf = ospf_lookup();
 
   //test fail in first cycle, send lsa
-  if(nbr->testing_flag==NSM_IN_FIRST_TESTING_FLAG)
+  if(nbr->testing_flag == NSM_IN_FIRST_TESTING_FLAG)
   {
-    zlog_debug("nbr->testing_flag==NSM_IN_TESTING_FLAG, need send ase");
-
-    remove_se_ase(ospf->router_id_static,1,0);
-    ospf_redistribute_unset(ospf,ZEBRA_ROUTE_KERNEL);
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_IN_TESTING_FLAG, need send ase");
+    remove_se_ase(ospf->router_id_static, 1, 0);  
+    // 首先可预测加上，再不可预测删除，即可实现路由发布  
+    static_inter_star_operation(1, 1);
+    static_inter_star_operation(0, 0);
+    // no need to operate default route and inter star static route, because it has been removed when state enter leaving 
+    // but how can as-external lsa (MAX_AGE) be sent in here?
+    // ospf_redistribute_unset(ospf, ZEBRA_ROUTE_KERNEL);
     //ospf_redistribute_unset(ospf,ZEBRA_ROUTE_CONNECT);
-
-
-    nbr->testing_flag=NSM_FIRST_TESTING_FAIL_FLAG;
+    nbr->testing_flag = NSM_FIRST_TESTING_FAIL_FLAG;
+#ifdef HAS_STAION_DEFAULT_ROUTE
+    // station operation
+#endif
     OSPF_NSM_TIMER_ON (nbr->t_test, ospf_predicted_link_up_timer ,nbr->v_test);
     return NSM_INTEROA_TESTING;
   }
   //test success in first cycle,don't send lsa
-  else if(nbr->testing_flag==NSM_FIRST_TESTING_SUCCESS_FLAG)
+  else if(nbr->testing_flag == NSM_FIRST_TESTING_SUCCESS_FLAG)
   {
-    
-    zlog_debug("nbr->testing_flag==NSM_TESTING_SUCCESS_FLAG, don't send lsa");
-    OSPF_ISM_EVENT_EXECUTE(oi,ISM_PredictedLinkUp);
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_TESTING_SUCCESS_FLAG, don't send lsa");
+    OSPF_ISM_EVENT_EXECUTE(oi, ISM_PredictedLinkUp);
     return NSM_INTEROA;
   }
   //test fail in cycle>=2,dont send lsa
-  else if(nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG)
+  else if(nbr->testing_flag == NSM_FIRST_TESTING_FAIL_FLAG)
   {
-    zlog_debug("nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG, don't send lsa");
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_FIRST_TESTING_FAIL_FLAG, don't send lsa");
     OSPF_NSM_TIMER_ON (nbr->t_test, ospf_predicted_link_up_timer ,nbr->v_test);
     return NSM_INTEROA_TESTING;   
   }
   //test success in cycle>=2,send lsa
-  else if(nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG)
+  else if(nbr->testing_flag == NSM_OTHER_TESTING_SUCCESS_FLAG)
   {
-    zlog_debug("nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG, need send ase");
-    OSPF_ISM_EVENT_EXECUTE(oi,ISM_PredictedLinkUp);
-
-    
+    if(MY_DEBUG)
+      zlog_debug("nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG, need send ase");
+    OSPF_ISM_EVENT_EXECUTE(oi, ISM_PredictedLinkUp);
     //lsa can't be sent here, nbr->state is still nsm_testing
     //ospf_router_lsa_update_area (oi->area);
-
     return NSM_INTEROA;
   }
   return NSM_INTEROA_TESTING;
 
 }
-
-
-
 
 /* Neighbor State Machine */
 struct {
@@ -815,13 +827,12 @@ struct {
 		{ NULL,                    NSM_Leaving    }, /* SeqNumberMismatch */
 		{ NULL,                    NSM_Leaving    }, /* 1-WayReceived     */
 		{ nsm_kill_nbr,            NSM_Deleted    }, /* KillNbr           */
-		{ NULL,                    NSM_Leaving    }, /* InactivityTimer   */  //Leaving状态下，不会收到hello包，因而Inactive事件发生后仍然为Leaving状态
+		{ NULL,                    NSM_Leaving    }, /* InactivityTimer   */  
 		{ nsm_kill_nbr,            NSM_Deleted    }, /* LLDown            */
 		{ NULL,                    NSM_Leaving    }, /* PredictedLinkDown */
-    { nsm_end_leaving,         NSM_DependUpon }, /* PredictedLinkUp   */  
+    { NULL,                    NSM_Leaving    }, /* PredictedLinkUp   */  
     { nsm_begin_testing,       NSM_Testing    }, /* BeginTesting      */
   },
-
   { /*Testing: */
 		{ NULL,                    NSM_DependUpon }, /* NoEvent           */
 		{ nsm_packet_received,     NSM_Testing    }, /* PacketReceived    */
@@ -835,10 +846,10 @@ struct {
 		{ NULL,                    NSM_Testing    }, /* SeqNumberMismatch */
 		{ NULL,                    NSM_Testing    }, /* 1-WayReceived     */
 		{ nsm_kill_nbr,            NSM_Deleted    }, /* KillNbr           */
-		{ NULL,                    NSM_Leaving    }, /* InactivityTimer   */  //Leaving状态下，不会收到hello包，因而Inactive事件发生后仍然为Leaving状态
+		{ NULL,                    NSM_Leaving    }, /* InactivityTimer   */  
 		{ nsm_kill_nbr,            NSM_Deleted    }, /* LLDown            */
 		{ NULL,                    NSM_Leaving    }, /* PredictedLinkDown */
-    { nsm_end_leaving,         NSM_DependUpon }, /* PredictedLinkUp   */  //此处不立即结束leaving状态，而在收到第一个包后更改状态
+    { nsm_end_testing,         NSM_DependUpon }, /* PredictedLinkUp   */ 
     { NULL,                    NSM_Testing    }, /* BeginTesting      */
   },
   { /*NSM_INTEROA: */
@@ -872,9 +883,9 @@ struct {
 		{ NULL,                    NSM_INTEROA_LEAVING    }, /* AdjOK?            */
 		{ NULL,                    NSM_INTEROA_LEAVING    }, /* SeqNumberMismatch */
 		{ NULL,                    NSM_INTEROA_LEAVING    }, /* 1-WayReceived     */
-		{ nsm_kill_nbr,            NSM_Deleted    }, /* KillNbr           */
+		{ nsm_kill_nbr,            NSM_Deleted            }, /* KillNbr           */
 		{ NULL,                    NSM_INTEROA_LEAVING    }, /* InactivityTimer   */  //Leaving状态下，不会收到hello包，因而Inactive事件发生后仍然为Leaving状态
-		{ nsm_kill_nbr,            NSM_Deleted    }, /* LLDown            */
+		{ nsm_kill_nbr,            NSM_Deleted            }, /* LLDown            */
 		{ NULL,                    NSM_INTEROA_LEAVING    }, /* PredictedLinkDown */
     { NULL,                    NSM_INTEROA_LEAVING    }, /* PredictedLinkUp   */  //don't response
     { nsm_begin_testing,       NSM_INTEROA_TESTING    }, /* BeginTesting      */
@@ -895,7 +906,7 @@ struct {
 		{ NULL,                    NSM_INTEROA_TESTING    }, /* InactivityTimer   */  //Leaving状态下，不会收到hello包，因而Inactive事件发生后仍然为Leaving状态
 		{ nsm_kill_nbr,            NSM_Deleted    }, /* LLDown            */
 		{ NULL,                    NSM_INTEROA_LEAVING    }, /* PredictedLinkDown */
-    { nsm_end_leaving_oa,      NSM_DependUpon         }, /* PredictedLinkUp   */  //此处不立即结束leaving状态，而在收到第一个包后更改状态
+    { nsm_end_testing_oa,      NSM_DependUpon         }, /* PredictedLinkUp   */  //此处不立即结束leaving状态，而在收到第一个包后更改状态
     { NULL,                    NSM_INTEROA_TESTING    }, /* BeginTesting      */
   },
 };
@@ -970,6 +981,8 @@ nsm_notice_state_change (struct ospf_neighbor *nbr, int next_state, int event)
 #endif
 }
 
+char normal_change_flag = 0;
+
 void
 nsm_change_state (struct ospf_neighbor *nbr, int state)
 {
@@ -993,51 +1006,105 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
   //ospf_redistribute_set and unset is for broadcasting as-external-lsas in unpredictable situations
   if(state==NSM_INTEROA || state==NSM_INTEROA_LEAVING || state==NSM_INTEROA_TESTING )
   {
-    if(state == NSM_INTEROA && old_state ==NSM_INTEROA_TESTING &&nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG)
+    if(state == NSM_INTEROA && old_state == NSM_INTEROA_TESTING && nbr->testing_flag == NSM_OTHER_TESTING_SUCCESS_FLAG)
     {
-      load_se_ase(ospf->router_id_static,1,0);
-      static_inter_star_operation(1,0);
-      ospf_redistribute_set (ospf, ZEBRA_ROUTE_KERNEL, 0, 10);
-      //ospf_redistribute_set (ospf, ZEBRA_ROUTE_CONNECT, 0, 10);
-      zlog_debug("in func nsm_change_state, nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG, send ase success");
+      peer_enable = 1;
+      load_se_ase(ospf->router_id_static, 1, 0);
+      static_inter_star_operation(1, 0);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+      outside_oa_default_operation(1, 0);
+#endif
+      // 不需要对于重发布进行修改，ip route修改时，就会发送LSA
+      // ospf_redistribute_set (ospf, ZEBRA_ROUTE_KERNEL, 0, 10);
+      // ospf_redistribute_set (ospf, ZEBRA_ROUTE_CONNECT, 0, 10);
+      if(MY_DEBUG)
+        zlog_debug("in func nsm_change_state, nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG, send ase success");
       
     }
-    else if(state == NSM_INTEROA && old_state == NSM_Init)
+    else if(state == NSM_INTEROA && old_state == NSM_INTEROA_TESTING)  // FIRST_TEST_SUCCESS
     {
-
-      zlog_debug("in func nsm_change_state, state == NSM_INTEROA && old_state == NSM_Init , send ase"); 
-
-      zlog_debug("load_se_ase because state == NSM_INTEROA && old_state == NSM_Init");
-      //load ase of self
-      load_se_ase(ospf->router_id_static,1, 1);
+      peer_enable = 1;
+      if(MY_DEBUG)
+        zlog_debug(" static_inter_star_operation(1) because state==NSM_INTEROA and old_state=%d", old_state);
+      load_se_ase(ospf->router_id_static, 1, 1);
       static_inter_star_operation(1, 1);
-      ospf_redistribute_set (ospf, ZEBRA_ROUTE_KERNEL, 0, 10);
-      //ospf_redistribute_set (ospf, ZEBRA_ROUTE_CONNECT, 0, 10);
-      
+#ifdef HAS_STAION_DEFAULT_ROUTE
+      outside_oa_default_operation(1, 1);
+#endif
     }
-    else if(old_state==NSM_INTEROA && state == NSM_INTEROA_LEAVING)
+    else if(old_state==NSM_INTEROA && state == NSM_INTEROA_LEAVING) 
     {
-      zlog_debug(" static_inter_star_operation(0) because old_state==NSM_INTEROA and state=%d",state);
-      remove_se_ase(ospf->router_id_static,1,1);
-      static_inter_star_operation(0,1);
+      peer_enable = 0;
+      if(MY_DEBUG)
+        zlog_debug(" static_inter_star_operation(0) because old_state==NSM_INTEROA and state=%d",state);
+      remove_se_ase(ospf->router_id_static, 1, 1);
+      static_inter_star_operation(0, 1);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+      outside_oa_default_operation(0, 1);
+#endif
     }
-    else if(state == NSM_INTEROA && old_state == NSM_INTEROA_TESTING)
+    else if(state == NSM_INTEROA && old_state != NSM_INTEROA)
     {
-      zlog_debug(" static_inter_star_operation(1) because state==NSM_INTEROA and old_state=%d",old_state);
-      load_se_ase(ospf->router_id_static,1,1);
-      static_inter_star_operation(1,1);
+      peer_enable = 1;
+      // 此类情况不属于可预测，比如意外中断后恢复
+      if(MY_DEBUG)
+        zlog_debug("in func nsm_change_state, state == NSM_INTEROA && old_state == NSM_Init , send ase, load_se_ase because state == NSM_INTEROA && old_state == NSM_Init"); 
+      // load ase of self
+      load_se_ase(ospf->router_id_static, 1, 0);
+      static_inter_star_operation(1, 0);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+      outside_oa_default_operation(1, 0);
+#endif
+      // 不需要对于重发布进行修改，ip route修改时，就会发送LSA
+      // ospf_redistribute_set (ospf, ZEBRA_ROUTE_KERNEL, 0, 10);
+      // ospf_redistribute_set (ospf, ZEBRA_ROUTE_CONNECT, 0, 10);
     }
     return;
   }
   if(state == NSM_Down && old_state == NSM_INTEROA)
   {
-
+    peer_enable = 1;
     //romove ase of self
-    remove_se_ase(ospf->router_id_static,1,0);
-    static_inter_star_operation(0,0);
-    ospf_redistribute_unset(ospf,ZEBRA_ROUTE_KERNEL);
-    zlog_debug("unset redistribute because of ioa nbr inactivity"); 
+    remove_se_ase(ospf->router_id_static, 1, 0);
+    static_inter_star_operation(0, 0);
+#ifdef HAS_STAION_DEFAULT_ROUTE
+    outside_oa_default_operation(0, 0);
+#endif
+    // ospf_redistribute_unset(ospf,ZEBRA_ROUTE_KERNEL);
+    if(MY_DEBUG)
+      zlog_debug("unset redistribute because of ioa nbr inactivity"); 
     return;
+  }
+
+  if(state == NSM_Exchange && old_state == NSM_Testing)
+  {
+    if(nbr->testing_flag == NSM_FIRST_TESTING_SUCCESS_FLAG)
+    {
+      if(MY_DEBUG)
+        zlog_debug("set normal_change_flag");
+      normal_change_flag = 1;
+    }
+    struct ospf_lsdb *lsdb = &nbr->newLSAsList;
+    for(int i = OSPF_MIN_LSA; i<OSPF_MAX_LSA; ++i)
+    {
+      struct route_table *table = lsdb->type[i].db;
+      for(struct route_node *rn = route_top(table); rn; rn = route_next(rn))
+      {
+        struct ospf_lsa *lsa;
+        if((lsa = rn->info) != NULL)
+        {
+          ospf_db_summary_add(nbr, lsa);
+        }
+      }
+    }
+    ospf_lsdb_delete_all(lsdb);
+    if(IS_SET_DD_MS(nbr->dd_flags))
+    {
+      if(MY_DEBUG)
+        zlog_debug("begin db_desc");
+      ospf_db_desc_send(nbr);
+      OSPF_NSM_TIMER_ON(nbr->t_db_desc, ospf_db_desc_timer, nbr->v_db_desc);
+    }
   }
 
 
@@ -1045,11 +1112,9 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
     vl_area = ospf_area_lookup_by_area_id (oi->ospf, oi->vl_data->vl_area_id);
 
   /* One of the neighboring routers changes to/from the FULL state. */
-
-
   //if normal leaving related change, don't send lsa
-  if ((old_state != NSM_Full && state == NSM_Full && old_state !=NSM_Testing) ||
-      (old_state == NSM_Full && state != NSM_Full && state !=NSM_Leaving))
+  if ((old_state != NSM_Full && state == NSM_Full && normal_change_flag == 0 ) || \
+      (old_state == NSM_Full && state != NSM_Full && state != NSM_Leaving))
     {
       if (state == NSM_Full)
 	    {
@@ -1087,18 +1152,17 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
 	          if (--vl_area->full_vls == 0)
 		          ospf_schedule_abr_task (oi->ospf);
 	    }
-
-
-
-
-      zlog_info ("nsm_change_state(%s, %s -> %s): "
-		  "scheduling new router-LSA origination",
-		  inet_ntoa (nbr->router_id),
-		  LOOKUP(ospf_nsm_state_msg, old_state),
-		  LOOKUP(ospf_nsm_state_msg, state));
+      if (IS_DEBUG_OSPF (nsm, NSM_EVENTS))
+      {
+        zlog_info ("nsm_change_state(%s, %s -> %s): "
+        "scheduling new router-LSA origination",
+        inet_ntoa (nbr->router_id),
+        LOOKUP(ospf_nsm_state_msg, old_state),
+        LOOKUP(ospf_nsm_state_msg, state));
+      }
 
       ospf_router_lsa_update_area (oi->area);
-      zlog_debug("send upd in nsm.c because of NSM_Full change");
+      // zlog_debug("send upd in nsm.c because of NSM_Full change");
       if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
 	    {
 	      struct ospf_area *vl_area =
@@ -1121,9 +1185,16 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
 	        ospf_network_lsa_update (oi);
 	    }
     }
+    // after transfer to Full, clear flag
+    if(state == NSM_Full)
+    {
+      normal_change_flag = 0;
+      if(MY_DEBUG)
+        zlog_debug("clear normal_change_flag");
+    }
 
     //send lsa when testing success in term >=2
-    if(state == NSM_Full && old_state ==NSM_Testing &&nbr->testing_flag==NSM_OTHER_TESTING_SUCCESS_FLAG)
+    if(state == NSM_Full && old_state == NSM_Testing &&nbr->testing_flag == NSM_OTHER_TESTING_SUCCESS_FLAG)
     {
       ospf_router_lsa_update_area (oi->area);
     }
@@ -1141,15 +1212,15 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
 
   /* Start DD exchange protocol */
   if (state == NSM_ExStart)
-    {
-      if (nbr->dd_seqnum == 0)
-	nbr->dd_seqnum = quagga_time (NULL);
-      else
-	nbr->dd_seqnum++;
+  {
+    if (nbr->dd_seqnum == 0)
+      nbr->dd_seqnum = quagga_time (NULL);
+    else
+      nbr->dd_seqnum++;
 
-      nbr->dd_flags = OSPF_DD_FLAG_I|OSPF_DD_FLAG_M|OSPF_DD_FLAG_MS;
-      ospf_db_desc_send (nbr);
-    }
+    nbr->dd_flags = OSPF_DD_FLAG_I|OSPF_DD_FLAG_M|OSPF_DD_FLAG_MS;
+    ospf_db_desc_send (nbr);
+  }
 
   /* clear cryptographic sequence number */
   if (state == NSM_Down)
@@ -1168,7 +1239,6 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
     /* ISM_PointToPoint -> ISM_Down, ISM_Loopback -> ISM_Down, etc. */
     break;
   }
-
   /* Preserve old status? */
 }
 
@@ -1195,26 +1265,26 @@ ospf_nsm_event (struct thread *thread)
 
   /* Call function. */
   if (NSM [nbr->state][event].func != NULL)
+  {
+    int func_state = (*(NSM [nbr->state][event].func))(nbr);
+    
+    if (NSM [nbr->state][event].next_state == NSM_DependUpon)
+      next_state = func_state;
+    else if (func_state)
     {
-      int func_state = (*(NSM [nbr->state][event].func))(nbr);
-      
-      if (NSM [nbr->state][event].next_state == NSM_DependUpon)
-        next_state = func_state;
-      else if (func_state)
-        {
-          /* There's a mismatch between the FSM tables and what an FSM
-           * action/state-change function returned. State changes which
-           * do not have conditional/DependUpon next-states should not
-           * try set next_state.
-           */
-          zlog_warn ("NSM[%s:%s]: %s (%s): "
-                     "Warning: action tried to change next_state to %s",
-                     IF_NAME (nbr->oi), inet_ntoa (nbr->router_id),
-                     LOOKUP (ospf_nsm_state_msg, nbr->state),
-                     ospf_nsm_event_str [event],
-                     LOOKUP (ospf_nsm_state_msg, func_state));
-        }
+      /* There's a mismatch between the FSM tables and what an FSM
+        * action/state-change function returned. State changes which
+        * do not have conditional/DependUpon next-states should not
+        * try set next_state.
+        */
+      zlog_warn ("NSM[%s:%s]: %s (%s): "
+                  "Warning: action tried to change next_state to %s",
+                  IF_NAME (nbr->oi), inet_ntoa (nbr->router_id),
+                  LOOKUP (ospf_nsm_state_msg, nbr->state),
+                  ospf_nsm_event_str [event],
+                  LOOKUP (ospf_nsm_state_msg, func_state));
     }
+  }
 
   assert (next_state != NSM_DependUpon);
 
@@ -1225,10 +1295,10 @@ ospf_nsm_event (struct thread *thread)
 
   /* If state is changed. */
   if (next_state != nbr->state)
-    {
-      nsm_notice_state_change (nbr, next_state, event);
-      nsm_change_state (nbr, next_state);
-    }
+  {
+    nsm_notice_state_change (nbr, next_state, event);
+    nsm_change_state (nbr, next_state);
+  }
 
   /* Make sure timer is set. */
   nsm_timer_set (nbr);
@@ -1242,7 +1312,8 @@ ospf_nsm_event (struct thread *thread)
    */
   if (nbr->state == NSM_Deleted)
     ospf_nbr_delete (nbr);
-  zlog_debug("in func ospf_nsm_event, end");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_nsm_event, end");
   return 0;
 }
 

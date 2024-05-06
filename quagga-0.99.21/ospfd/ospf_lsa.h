@@ -49,6 +49,7 @@
 
 #define OSPF_LSA_HEADER_SIZE	     20U
 #define OSPF_ROUTER_LSA_LINK_SIZE    12U
+// wyc modify
 #define OSPF_ROUTER_LSA_TOS_SIZE      0U
 #define OSPF_MAX_LSA_SIZE	   1500U
 
@@ -117,12 +118,21 @@ struct ospf_lsa
   /* Refreshement List or Queue */
   int refresh_list;
   
+  // 链路通断预置信息，只有预置LSA才有
   int phase_count;
   int links_count;
   int **phase_matrix;
+  // se_add_x时，修改router-lsa的辅助标志，无其他作用
   char se_x_flag;
   #define se_x_not_modify 0x00
   #define se_x_modify 0x01
+  
+  // 指的是lsa接收到时候的数值，便于整理数据库
+  // 接收以后，就把LSA在link-tos中的这些数值取出，放在这里，然后tos字段清零
+  char lsa_phase;
+  char lsa_x;
+  char lsa_y;
+
   /* For Type-9 Opaque-LSAs */
   struct ospf_interface *oi;
 };
@@ -133,6 +143,7 @@ struct ospf_lsa
 #define LSA_LINK_TYPE_STUB             3
 #define LSA_LINK_TYPE_VIRTUALLINK      4
 #define LSA_LINK_TYPE_SE               5
+#define LSA_LINK_TYPE_INFO             6
 
 /* OSPF Router LSA Flag. */
 #define ROUTER_LSA_BORDER	       0x01 /* The router is an ABR */

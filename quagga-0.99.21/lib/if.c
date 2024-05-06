@@ -691,15 +691,16 @@ connected_delete_by_prefix (struct interface *ifp, struct prefix *p)
   struct listnode *node;
   struct listnode *next;
   struct connected *ifc;
-
-  zlog_debug("in func connected_delete_by_prefix,p->u=%x/%d",p->u.prefix4.s_addr,p->prefixlen);
+  if(MY_DEBUG)
+    zlog_debug("in func connected_delete_by_prefix,p->u=%x/%d",p->u.prefix4.s_addr,p->prefixlen);
   
   /* In case of same prefix come, replace it with new one. */
   for (node = listhead (ifp->connected); node; node = next)
     {
       ifc = listgetdata (node);
       next = node->next;
-      zlog_debug("ifc->address=%x/%d",ifc->address->u.prefix4.s_addr,ifc->address->prefixlen);
+      if(MY_DEBUG)
+        zlog_debug("ifc->address=%x/%d",ifc->address->u.prefix4.s_addr,ifc->address->prefixlen);
       if (connected_same_prefix (ifc->address, p))
 	{
 	  listnode_delete (ifp->connected, ifc);

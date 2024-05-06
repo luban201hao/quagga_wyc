@@ -64,14 +64,16 @@ ospf_router_id_update_zebra (int command, struct zclient *zclient,
 {
   struct ospf *ospf;
   struct prefix router_id;
-  zlog_debug("in func ospf_router_id_update_zebra");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_router_id_update_zebra");
   zebra_router_id_update_read(zclient->ibuf,&router_id);
 
   if (IS_DEBUG_OSPF (zebra, ZEBRA_INTERFACE))
     {
       char buf[128];
       prefix2str(&router_id, buf, sizeof(buf));
-      zlog_debug("Zebra rcvd: router id update %s", buf);
+      if(MY_DEBUG)
+        zlog_debug("Zebra rcvd: router id update %s", buf);
     }
 
   router_id_zebra = router_id.u.prefix4;
@@ -100,10 +102,10 @@ ospf_interface_add (int command, struct zclient *zclient, zebra_size_t length)
   assert (ifp->info);
 
   if (!OSPF_IF_PARAM_CONFIGURED (IF_DEF_PARAMS (ifp), type))
-    {
-      SET_IF_PARAM (IF_DEF_PARAMS (ifp), type);
-      IF_DEF_PARAMS (ifp)->type = ospf_default_iftype(ifp);
-    }
+  {
+    SET_IF_PARAM (IF_DEF_PARAMS (ifp), type);
+    IF_DEF_PARAMS (ifp)->type = ospf_default_iftype(ifp);
+  }
 
   ospf_if_update (NULL, ifp);
 
@@ -257,8 +259,8 @@ ospf_interface_address_add (int command, struct zclient *zclient,
 {
   struct connected *c;
   struct route_node *rn;
-
-  zlog_debug("in func ospf_interface_address_add");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_interface_address_add");
   //connected info will be add to ifp here
   c = zebra_interface_address_read (command, zclient->ibuf);
 
@@ -271,7 +273,8 @@ ospf_interface_address_add (int command, struct zclient *zclient,
       prefix2str(c->address, buf, sizeof(buf));
       zlog_debug("Zebra: interface %s address add %s", c->ifp->name, buf);
   }
-  zlog_debug("in func ospf_interface_address_add,interface %s address add %x/%d", c->ifp->name, c->address->u.prefix4.s_addr,c->address->prefixlen);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_interface_address_add,interface %s address add %x/%d", c->ifp->name, c->address->u.prefix4.s_addr,c->address->prefixlen);
 
   ospf_if_update (NULL, c->ifp);
 
@@ -285,9 +288,10 @@ ospf_interface_address_add (int command, struct zclient *zclient,
       {
         if(oi->type==OSPF_IFTYPE_SE)
         {
-          oi->connected=c;
-          oi->address=c->address;
-          zlog_debug("in ospf_interface_address_add, se->connect has update");
+          oi->connected = c;
+          oi->address = c->address;
+          if(MY_DEBUG)
+            zlog_debug("in ospf_interface_address_add, se->connect has update");
         }
       }
     }
@@ -309,7 +313,8 @@ ospf_interface_address_delete (int command, struct zclient *zclient,
   struct ospf_interface *oi;
   struct route_node *rn;
   struct prefix p;
-  zlog_debug("in func ospf_interface_address_delete");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_interface_address_delete");
   //address will be delete here, cause core dump
   c = zebra_interface_address_read (command, zclient->ibuf);
 
@@ -322,8 +327,8 @@ ospf_interface_address_delete (int command, struct zclient *zclient,
       prefix2str(c->address, buf, sizeof(buf));
       zlog_debug("Zebra: interface %s address delete %s", c->ifp->name, buf);
     }
-
-  zlog_debug("in func ospf_interface_address_delete,interface %s address delete %x/%d", c->ifp->name, c->address->u.prefix4.s_addr,c->address->prefixlen);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_interface_address_delete,interface %s address delete %x/%d", c->ifp->name, c->address->u.prefix4.s_addr,c->address->prefixlen);
 
   ifp = c->ifp;
   p = *c->address;
@@ -348,7 +353,8 @@ ospf_interface_address_delete (int command, struct zclient *zclient,
   {
     oi->connected=NULL;
     oi->address=NULL;
-    zlog_debug("in func ospf_interface_address_delete,this is a se");
+    if(MY_DEBUG)
+      zlog_debug("in func ospf_interface_address_delete,this is a se");
   }
 #ifdef HAVE_SNMP
   ospf_snmp_if_update (c->ifp);
@@ -567,12 +573,14 @@ ospf_is_type_redistributed (int type)
 int
 ospf_redistribute_set (struct ospf *ospf, int type, int mtype, int mvalue)
 {
-  zlog_debug("in func ospf_redistribute_set,type=%d,mtype=%d,mvalue=%d",type,mtype,mvalue);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_redistribute_set,type=%d,mtype=%d,mvalue=%d",type,mtype,mvalue);
   int force = 0;
 
   if (ospf_is_type_redistributed (type))
     {
-      zlog_debug("in func ospf_redistribute_set,is type redistribute, refresh");
+      if(MY_DEBUG)
+        zlog_debug("in func ospf_redistribute_set,is type redistribute, refresh");
       if (mtype != ospf->dmetric[type].type)
         {
           ospf->dmetric[type].type = mtype;
@@ -726,12 +734,15 @@ ospf_distribute_check_connected (struct ospf *ospf, struct external_info *ei)
 {
   struct listnode *node;
   struct ospf_interface *oi;
-
+  // 此处防止了直连的星地接口路由被重发布
+  // ================ wyc add ===============================================
   if(prefix_match(se_prefix,(struct prefix *) &ei->p))
   {
-    zlog_debug("in func ospf_distribute_check_connected,match se_prefix");
+    if(MY_DEBUG)
+      zlog_debug("in func ospf_distribute_check_connected,match se_prefix, ei->p->prefixlen = %d", ei->p.prefixlen);
     return 0;
   }
+  // =========================================================================
   for (ALL_LIST_ELEMENTS_RO (ospf->oiflist, node, oi))
       if (prefix_match (oi->address, (struct prefix *) &ei->p) && oi->type!=OSPF_IFTYPE_INTEROA )
           return 0;
@@ -757,7 +768,8 @@ ospf_redistribute_check (struct ospf *ospf,
   /* Take care connected route. */
   if (type == ZEBRA_ROUTE_CONNECT && !ospf_distribute_check_connected (ospf, ei))
   {
-    zlog_debug("in ospf_redistribute_check, ospf_distribute_check_connected fail");
+    if(MY_DEBUG)
+      zlog_debug("in ospf_redistribute_check, ospf_distribute_check_connected fail");
     return 0;
   }
     
@@ -766,13 +778,13 @@ ospf_redistribute_check (struct ospf *ospf,
     /* distirbute-list exists, but access-list may not? */
     if (DISTRIBUTE_LIST (ospf, type))
       if (access_list_apply (DISTRIBUTE_LIST (ospf, type), p) == FILTER_DENY)
-        {
-          if (IS_DEBUG_OSPF (zebra, ZEBRA_REDISTRIBUTE))
-            zlog_debug ("Redistribute[%s]: %s/%d filtered by ditribute-list.",
-                       ospf_redist_string(type),
-                       inet_ntoa (p->prefix), p->prefixlen);
-          return 0;
-        }
+      {
+        if (IS_DEBUG_OSPF (zebra, ZEBRA_REDISTRIBUTE))
+          zlog_debug ("Redistribute[%s]: %s/%d filtered by ditribute-list.",
+                      ospf_redist_string(type),
+                      inet_ntoa (p->prefix), p->prefixlen);
+        return 0;
+      }
 
   save_values = ei->route_map_set;
   ospf_reset_route_map_set_values (&ei->route_map_set);
@@ -830,7 +842,8 @@ static int
 ospf_zebra_read_ipv4 (int command, struct zclient *zclient,
                       zebra_size_t length)
 {
-  zlog_debug("in func ospf_zebra_read_ipv4");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_zebra_read_ipv4");
   struct stream *s;
   struct zapi_ipv4 api;
   unsigned long ifindex;
@@ -877,15 +890,9 @@ ospf_zebra_read_ipv4 (int command, struct zclient *zclient,
   ospf = ospf_lookup ();
   if (ospf == NULL)
     return 0;
-
-
-  zlog_debug("in func ospf_zebra_read_ipv4,p=%x/%d",p.prefix.s_addr,p.prefixlen);
-
-  // if( prefix_match(se_prefix,(struct prefix *)&p))
-  // {
-  //   zlog_debug("in func ospf_zebra_read_ipv4, p match se_prefix,return ");
-  //   return 0;
-  // }
+  
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_zebra_read_ipv4,p = %s/%d, predictable_ase_cnt = %d, command = %d", inet_ntoa(p.prefix), p.prefixlen, predictable_ase_cnt, command);
 
   if (command == ZEBRA_IPV4_ROUTE_ADD)
   {
@@ -911,11 +918,18 @@ ospf_zebra_read_ipv4 (int command, struct zclient *zclient,
     {
       if (ei)
       {
-        if(predictable_ase_cnt>0)
+        // ============================   wyc add ===================================== 
+        // no matter add or delete, we sub predictable_ase_cnt here
+        // when predictable_ase_cnt == 0, we can broadcast lsas (when delete, the lsa's age equals LSA_MAX_AGE)
+        // otherwise it is predictable, don't broadcast
+        // 出现predictable后，无论如何，都不进行后续操作（例如redistribute_check）
+        if(predictable_ase_cnt > 0)
         {
-          zlog_debug("in func ospf_zebra_read_ipv4, predictable_ase_cnt=%d,skip\n",predictable_ase_cnt);
+          if(MY_DEBUG)
+            zlog_debug("in func ospf_zebra_read_ipv4, predictable_ase_cnt = %d,skip",predictable_ase_cnt);
           predictable_ase_cnt--;
         }
+        // ============================================================================
         else
         {
           if (is_prefix_default (&p))
@@ -929,35 +943,41 @@ ospf_zebra_read_ipv4 (int command, struct zclient *zclient,
             {
               ospf_external_lsa_originate (ospf, ei);
             }
-            else if (IS_LSA_MAXAGE (current))
+            //  ==================   wyc add =======================
+            else if (IS_LSA_MAXAGE (current) || current->data->id.s_addr == 0)
             {
+              if(MY_DEBUG && current->data->id.s_addr == 0)
+                zlog_debug("ospf_external_lsa_refresh for asel-dr");
               ospf_external_lsa_refresh (ospf, current,
                                         ei, LSA_REFRESH_FORCE);
             }
             else
+            {
               zlog_warn ("ospf_zebra_read_ipv4() : %s already exists",
                         inet_ntoa (p.prefix));
+              zlog_warn("lsa->age = %d, lsa->adv = %x, lsa->id = %x", LS_AGE(current), current->data->adv_router.s_addr, current->data->id.s_addr);
+            }
           }
         }
       }
     }
   }
-  else                          /* if (command == ZEBRA_IPV4_ROUTE_DELETE) */
+  else  /* if (command == ZEBRA_IPV4_ROUTE_DELETE) */
   {
     ospf_external_info_delete (api.type, p);
-    if (is_prefix_default (&p))
-      ospf_external_lsa_refresh_default (ospf);
-    else
-    {
-      if(predictable_ase_cnt>0)
-      {
-        predictable_ase_cnt--;
-      }
+
+    if(predictable_ase_cnt>0) {
+      if(MY_DEBUG)
+        zlog_debug("in func ospf_zebra_read_ipv4, predictable_ase_cnt = %d,skip",predictable_ase_cnt);
+      predictable_ase_cnt--;
+    }
+    else{
+      if (is_prefix_default (&p))
+        ospf_external_lsa_refresh_default (ospf);
       else
       {
-        ospf_external_lsa_flush (ospf, api.type, &p, ifindex /*, nexthop */);
+        ospf_external_lsa_flush (ospf, api.type, &p, ifindex /*, nexthop */);      
       }
-      
     }
   }
 
@@ -1020,8 +1040,9 @@ ospf_distribute_list_update_timer (struct thread *thread)
     return 0;
 
   ospf->t_distribute_update = NULL;
-
-  zlog_info ("Zebra[Redistribute]: distribute-list update timer fired!");
+  
+  if(MY_DEBUG)
+    zlog_info ("Zebra[Redistribute]: distribute-list update timer fired!");
 
   /* foreach all external info. */
   for (type = 0; type <= ZEBRA_ROUTE_MAX; type++)

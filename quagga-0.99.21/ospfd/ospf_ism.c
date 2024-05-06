@@ -55,18 +55,18 @@ ospf_dr_election_sub (struct list *routers)
   /* Choose highest router priority.
      In case of tie, choose highest Router ID. */
   for (ALL_LIST_ELEMENTS_RO (routers, node, nbr))
+  {
+    if (max == NULL)
+      max = nbr;
+    else
     {
-      if (max == NULL)
-	max = nbr;
-      else
-	{
-	  if (max->priority < nbr->priority)
-	    max = nbr;
-	  else if (max->priority == nbr->priority)
-	    if (IPV4_ADDR_CMP (&max->router_id, &nbr->router_id) < 0)
-	      max = nbr;
-	}
+      if (max->priority < nbr->priority)
+        max = nbr;
+      else if (max->priority == nbr->priority)
+        if (IPV4_ADDR_CMP (&max->router_id, &nbr->router_id) < 0)
+          max = nbr;
     }
+  }
 
   return max;
 }
@@ -82,15 +82,15 @@ ospf_elect_dr (struct ospf_interface *oi, struct list *el_list)
 
   /* Add neighbors to the list. */
   for (ALL_LIST_ELEMENTS_RO (el_list, node, nbr))
-    {
-      /* neighbor declared to be DR. */
-      if (NBR_IS_DR (nbr))
-	listnode_add (dr_list, nbr);
+  {
+    /* neighbor declared to be DR. */
+    if (NBR_IS_DR (nbr))
+      listnode_add (dr_list, nbr);
 
-      /* Preserve neighbor BDR. */
-      if (IPV4_ADDR_SAME (&BDR (oi), &nbr->address.u.prefix4))
-	bdr = nbr;
-    }
+    /* Preserve neighbor BDR. */
+    if (IPV4_ADDR_SAME (&BDR (oi), &nbr->address.u.prefix4))
+      bdr = nbr;
+  }
 
   /* Elect Designated Router. */
   if (listcount (dr_list) > 0)
@@ -220,9 +220,10 @@ ospf_dr_election (struct ospf_interface *oi)
   dr = ospf_elect_dr (oi, el_list);
 
   new_state = ospf_ism_state (oi);
-
-  zlog_debug ("DR-Election[1st]: Backup %s", inet_ntoa (BDR (oi)));
-  zlog_debug ("DR-Election[1st]: DR     %s", inet_ntoa (DR (oi)));
+  if(MY_DEBUG)
+    zlog_debug ("DR-Election[1st]: Backup %s", inet_ntoa (BDR (oi)));
+  if(MY_DEBUG)
+    zlog_debug ("DR-Election[1st]: DR     %s", inet_ntoa (DR (oi)));
 
   if (new_state != old_state &&
       !(new_state == ISM_DROther && old_state < ISM_DROther))
@@ -231,9 +232,10 @@ ospf_dr_election (struct ospf_interface *oi)
       ospf_elect_dr (oi, el_list); 
 
       new_state = ospf_ism_state (oi);
-
-      zlog_debug ("DR-Election[2nd]: Backup %s", inet_ntoa (BDR (oi)));
-      zlog_debug ("DR-Election[2nd]: DR     %s", inet_ntoa (DR (oi)));
+      if(MY_DEBUG)
+        zlog_debug ("DR-Election[2nd]: Backup %s", inet_ntoa (BDR (oi)));
+      if(MY_DEBUG)
+        zlog_debug ("DR-Election[2nd]: DR     %s", inet_ntoa (DR (oi)));
     }
 
   list_delete (el_list);
@@ -291,7 +293,8 @@ ospf_wait_timer (struct thread *thread)
 static void
 ism_timer_set (struct ospf_interface *oi)
 {
-  zlog_debug("in ism_timer_set: oi->state=%s",LOOKUP (ospf_ism_state_msg, oi->state));
+  if(MY_DEBUG)
+    zlog_debug("in ism_timer_set: oi->state=%s",LOOKUP (ospf_ism_state_msg, oi->state));
   switch (oi->state)
     {
     case ISM_Down:
@@ -352,7 +355,8 @@ ism_timer_set (struct ospf_interface *oi)
       OSPF_ISM_TIMER_ON (oi->t_ls_ack, ospf_ls_ack_timer, oi->v_ls_ack);
       break;
     case ISM_Leaving:
-      zlog_debug("timer set in ism_leaving");
+      if(MY_DEBUG)
+        zlog_debug("timer set in ism_leaving");
       OSPF_ISM_TIMER_OFF(oi->t_wait);
       OSPF_ISM_TIMER_OFF(oi->t_hello);
       OSPF_ISM_TIMER_OFF(oi->t_ls_ack);
@@ -363,7 +367,8 @@ ism_timer_set (struct ospf_interface *oi)
       OSPF_HELLO_TIMER_ON (oi);
       OSPF_ISM_TIMER_OFF (oi->t_wait);
       OSPF_ISM_TIMER_OFF (oi->t_ls_ack);
-      zlog_debug("timer set in ism_testing");
+      if(MY_DEBUG)
+        zlog_debug("timer set in ism_testing");
       break;
     
     case ISM_INTEROA:
@@ -469,21 +474,24 @@ ism_ignore (struct ospf_interface *oi)
 static int 
 ism_begin_leaving(struct ospf_interface *oi)
 {
-  zlog_debug("in func ism_begin_leaving");
+  if(MY_DEBUG)
+    zlog_debug("in func ism_begin_leaving");
   return 0;
 }
 
 static int 
 ism_end_leaving(struct ospf_interface *oi)
 {
-  zlog_debug("in func ism_end_leaving");
+  if(MY_DEBUG)
+    zlog_debug("in func ism_end_leaving");
   return 0;
 }
 
 static int 
 ism_begin_testing(struct ospf_interface *oi)
 {
-  zlog_debug("in func ism_begin_testing");
+  if(MY_DEBUG)
+    zlog_debug("in func ism_begin_testing");
   return 0;
 }
 
@@ -765,18 +773,21 @@ if(oi->state==ISM_INTEROA || oi->state==ISM_INTEROA_LEAVING || oi->state==ISM_IN
     oi->area->act_ints++;
 
   /* schedule router-LSA originate. */
-  zlog_debug("in func ism change state 1");
+  if(MY_DEBUG)
+    zlog_debug("in func ism change state 1");
   //normal leaving related change, don't send lsa
   
   if((state==ISM_Leaving && old_state == ISM_PointToPoint) || (state==ISM_Testing && old_state==ISM_Leaving) || (state==ISM_PointToPoint && old_state == ISM_Testing))
   {
-    zlog_debug("state=%d,old state=%d,don't send lsa,return",state,old_state);
+    if(MY_DEBUG)
+      zlog_debug("state=%d,old state=%d,don't send lsa,return",state,old_state);
     return;
   }
-  
-  zlog_debug("in func ism change state 2");
+  if(MY_DEBUG)
+    zlog_debug("in func ism change state 2");
   ospf_router_lsa_update_area (oi->area);
-  zlog_debug("send upd in ism.c because of ISM state change");
+  if(MY_DEBUG)
+    zlog_debug("send upd in ism.c because of ISM state change");
   /* Originate network-LSA. */
   if (old_state != ISM_DR && state == ISM_DR)
     ospf_network_lsa_update (oi);
@@ -809,10 +820,12 @@ ospf_ism_event (struct thread *thread)
 
   oi = THREAD_ARG (thread);
   event = THREAD_VAL (thread);
-  zlog_debug("in func ospf_ism_event 1,event=%d",event);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ism_event 1,event=%d",event);
   /* Call function. */
   next_state = (*(ISM [oi->state][event].func))(oi);
-  zlog_debug("in func ospf_ism_event 2");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ism_event 2");
   if (! next_state)
     next_state = ISM [oi->state][event].next_state;
 
@@ -824,10 +837,12 @@ ospf_ism_event (struct thread *thread)
   /* If state is changed. */
   if (next_state != oi->state)
     ism_change_state (oi, next_state);
-  zlog_debug("in func ospf_ism_event 3");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ism_event 3");
   /* Make sure timer is set. */
   ism_timer_set (oi);
-  zlog_debug("in func ospf_ism_event 4");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ism_event 4");
   return 0;
 }
 

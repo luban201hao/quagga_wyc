@@ -481,48 +481,47 @@ ospf_ls_upd_timer (struct thread *thread)
 
   /* Send Link State Update. */
   if (ospf_ls_retransmit_count (nbr) > 0)
+  {
+    struct list *update;
+    struct ospf_lsdb *lsdb;
+    int i;
+    int retransmit_interval;
+
+    retransmit_interval = OSPF_IF_PARAM (nbr->oi, retransmit_interval);
+
+    lsdb = &nbr->ls_rxmt;
+    update = list_new ();
+
+    for (i = OSPF_MIN_LSA; i < OSPF_MAX_LSA; i++)
     {
-      struct list *update;
-      struct ospf_lsdb *lsdb;
-      int i;
-      int retransmit_interval;
-
-      retransmit_interval = OSPF_IF_PARAM (nbr->oi, retransmit_interval);
-
-      lsdb = &nbr->ls_rxmt;
-      update = list_new ();
-
-      for (i = OSPF_MIN_LSA; i < OSPF_MAX_LSA; i++)
-	{
-	  struct route_table *table = lsdb->type[i].db;
-	  struct route_node *rn;
-	  
-	  for (rn = route_top (table); rn; rn = route_next (rn))
-	    {
-	      struct ospf_lsa *lsa;
-	      
-	      if ((lsa = rn->info) != NULL)
-		/* Don't retransmit an LSA if we received it within
-		  the last RxmtInterval seconds - this is to allow the
-		  neighbour a chance to acknowledge the LSA as it may
-		  have ben just received before the retransmit timer
-		  fired.  This is a small tweak to what is in the RFC,
-		  but it will cut out out a lot of retransmit traffic
-		  - MAG */
-		if (tv_cmp (tv_sub (recent_relative_time (), lsa->tv_recv), 
-			    int2tv (retransmit_interval)) >= 0)
-		  listnode_add (update, rn->info);
-	    }
-	}
-
-      if (listcount (update) > 0)
+      struct route_table *table = lsdb->type[i].db;
+      struct route_node *rn;
+      
+      for (rn = route_top (table); rn; rn = route_next (rn))
       {
-        ospf_ls_upd_send (nbr, update, OSPF_SEND_PACKET_DIRECT);
-        zlog_debug("send upd in ospf_packet.c ospf_ls_upd_timer");
+        struct ospf_lsa *lsa;
+        
+        if ((lsa = rn->info) != NULL)
+    /* Don't retransmit an LSA if we received it within
+      the last RxmtInterval seconds - this is to allow the
+      neighbour a chance to acknowledge the LSA as it may
+      have ben just received before the retransmit timer
+      fired.  This is a small tweak to what is in the RFC,
+      but it will cut out out a lot of retransmit traffic
+      - MAG */
+        if (tv_cmp (tv_sub (recent_relative_time (), lsa->tv_recv), int2tv (retransmit_interval)) >= 0)
+          listnode_add (update, rn->info);
       }
-	
-      list_delete (update);
     }
+
+    if (listcount (update) > 0)
+    {
+      ospf_ls_upd_send (nbr, update, OSPF_SEND_PACKET_DIRECT);
+      // zlog_debug("send upd in ospf_packet.c ospf_ls_upd_timer");
+    }
+
+    list_delete (update);
+  }
 
   /* Set LS Update retransmission timer. */
   OSPF_NSM_TIMER_ON (nbr->t_ls_upd, ospf_ls_upd_timer, nbr->v_ls_upd);
@@ -814,7 +813,8 @@ static void
 ospf_hello (struct ip *iph, struct ospf_header *ospfh,
 	    struct stream * s, struct ospf_interface *oi, int size)
 {
-  zlog_debug("in func ospf_hello");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_hello");
   struct ospf_hello *hello;
   struct ospf_neighbor *nbr;
   int old_state;
@@ -944,10 +944,14 @@ ospf_hello (struct ip *iph, struct ospf_header *ospfh,
 		   inet_ntoa(ospfh->router_id), OPTIONS (oi), hello->options);
 	return;
       }
-  zlog_debug("in func ospf_hello, before ospf_nbr_get");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_hello, before ospf_nbr_get");
+  
   /* get neighbour struct */
   nbr = ospf_nbr_get (oi, ospfh, iph, &p);
-  zlog_debug("in func ospf_hello, after ospf_nbr_get");
+  
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_hello, after ospf_nbr_get");
   /* neighbour must be valid, ospf_nbr_get creates if none existed */
   assert (nbr);
 
@@ -955,7 +959,9 @@ ospf_hello (struct ip *iph, struct ospf_header *ospfh,
 
   /* Add event to thread. */
   OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_PacketReceived);
-  zlog_debug("in func ospf_hello, after nsm_packet receive");
+
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_hello, after nsm_packet receive");
   /*  RFC2328  Section 9.5.1
       If the router is not eligible to become Designated Router,
       (snip)   It	must also send an Hello	Packet in reply	to an
@@ -1062,11 +1068,11 @@ ospf_db_desc_proc (struct stream *s, struct ospf_interface *oi,
 
       /* Unknown LS type. */
       if (lsah->type < OSPF_MIN_LSA || lsah->type >= OSPF_MAX_LSA)
-	{
-	  zlog_warn ("Packet [DD:RECV]: Unknown LS type %d.", lsah->type);
-	  OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_SeqNumberMismatch);
-	  return;
-	}
+      {
+        zlog_warn ("Packet [DD:RECV]: Unknown LS type %d.", lsah->type);
+        OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_SeqNumberMismatch);
+        return;
+      }
 
 #ifdef HAVE_OPAQUE_LSA
       if (IS_OPAQUE_LSA (lsah->type)
@@ -1143,34 +1149,34 @@ ospf_db_desc_proc (struct stream *s, struct ospf_interface *oi,
 
   /* Master */
   if (IS_SET_DD_MS (nbr->dd_flags))
-    {
-      nbr->dd_seqnum++;
+  {
+    nbr->dd_seqnum++;
 
-      /* Both sides have no More, then we're done with Exchange */
-      if (!IS_SET_DD_M (dd->flags) && !IS_SET_DD_M (nbr->dd_flags))
-	OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_ExchangeDone);
-      else
-	ospf_db_desc_send (nbr);
-    }
+    /* Both sides have no More, then we're done with Exchange */
+    if (!IS_SET_DD_M (dd->flags) && !IS_SET_DD_M (nbr->dd_flags))
+      OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_ExchangeDone);
+    else
+      ospf_db_desc_send (nbr);
+  }
   /* Slave */
   else
-    {
-      nbr->dd_seqnum = ntohl (dd->dd_seqnum);
+  {
+    nbr->dd_seqnum = ntohl (dd->dd_seqnum);
 
-      /* Send DD packet in reply. 
-       * 
-       * Must be done to acknowledge the Master's DD, regardless of
-       * whether we have more LSAs ourselves to describe.
-       *
-       * This function will clear the 'More' bit, if after this DD
-       * we have no more LSAs to describe to the master..
-       */
-      ospf_db_desc_send (nbr);
-      
-      /* Slave can raise ExchangeDone now, if master is also done */
-      if (!IS_SET_DD_M (dd->flags) && !IS_SET_DD_M (nbr->dd_flags))
-	OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_ExchangeDone);
-    }
+    /* Send DD packet in reply. 
+      * 
+      * Must be done to acknowledge the Master's DD, regardless of
+      * whether we have more LSAs ourselves to describe.
+      *
+      * This function will clear the 'More' bit, if after this DD
+      * we have no more LSAs to describe to the master..
+      */
+    ospf_db_desc_send (nbr);
+    
+    /* Slave can raise ExchangeDone now, if master is also done */
+    if (!IS_SET_DD_M (dd->flags) && !IS_SET_DD_M (nbr->dd_flags))
+      OSPF_NSM_EVENT_SCHEDULE (nbr, NSM_ExchangeDone);
+  }
   
   /* Save received neighbor values from DD. */
   ospf_db_desc_save_current (nbr, dd);
@@ -1539,12 +1545,14 @@ ospf_ls_req (struct ip *iph, struct ospf_header *ospfh,
 	  if (oi->type == OSPF_IFTYPE_NBMA)
     {
       ospf_ls_upd_send (nbr, ls_upd, OSPF_SEND_PACKET_DIRECT);
-      zlog_debug("send upd in ospf_packet.c ospf_ls_req 1");
+      if(MY_DEBUG)
+        zlog_debug("send upd in ospf_packet.c ospf_ls_req 1");
     }
 	    
 	  else
     {
 	    ospf_ls_upd_send (nbr, ls_upd, OSPF_SEND_PACKET_INDIRECT);
+      if(MY_DEBUG)
       zlog_debug("send upd in ospf_packet.c ospf_ls_req 2");
     }
 	  /* Only remove list contents.  Keep ls_upd. */
@@ -1566,12 +1574,14 @@ ospf_ls_req (struct ip *iph, struct ospf_header *ospfh,
       if (oi->type == OSPF_IFTYPE_NBMA)
       {
 	      ospf_ls_upd_send (nbr, ls_upd, OSPF_SEND_PACKET_DIRECT);
-        zlog_debug("send upd in ospf_packet.c ospf_ls_req 3");
+        if(MY_DEBUG)
+          zlog_debug("send upd in ospf_packet.c ospf_ls_req 3");
       }
       else
       {
 	      ospf_ls_upd_send (nbr, ls_upd, OSPF_SEND_PACKET_INDIRECT);
-        zlog_debug("send upd in ospf_packet.c ospf_ls_req 4");
+        if(MY_DEBUG)
+          zlog_debug("send upd in ospf_packet.c ospf_ls_req 4");
       }
       list_delete (ls_upd);
     }
@@ -1603,31 +1613,31 @@ ospf_ls_upd_list_lsa (struct ospf_neighbor *nbr, struct stream *s,
       length = ntohs (lsah->length);
 
       if (length > size)
-	{
-	  zlog_warn ("Link State Update: LSA length exceeds packet size.");
-	  break;
-	}
-
+      {
+        zlog_warn ("Link State Update: LSA length exceeds packet size.");
+        break;
+      }
+      // ======================   wyc note: checksum check, important ==================================
       /* Validate the LSA's LS checksum. */
       sum = lsah->checksum;
       if (sum != ospf_lsa_checksum (lsah))
-	{
-	  /* (bug #685) more details in a one-line message make it possible
-	   * to identify problem source on the one hand and to have a better
-	   * chance to compress repeated messages in syslog on the other */
-	  zlog_warn ("Link State Update: LSA checksum error %x/%x, ID=%s from: nbr %s, router ID %s, adv router %s",
-		     sum, lsah->checksum, inet_ntoa (lsah->id),
-		     inet_ntoa (nbr->src), inet_ntoa (nbr->router_id),
-		     inet_ntoa (lsah->adv_router));
-	  continue;
-	}
+      {
+        /* (bug #685) more details in a one-line message make it possible
+        * to identify problem source on the one hand and to have a better
+        * chance to compress repeated messages in syslog on the other */
+        zlog_warn ("Link State Update: LSA checksum error %x(in packet)/%x(should be), ID=%x from: nbr %x, router ID %x, adv router %x",
+            sum, lsah->checksum, ntohl(lsah->id.s_addr),
+            ntohl (nbr->src.s_addr), ntohl (nbr->router_id.s_addr),
+            ntohl (lsah->adv_router.s_addr));
+        continue;
+      }
 
       /* Examine the LSA's LS type. */
       if (lsah->type < OSPF_MIN_LSA || lsah->type >= OSPF_MAX_LSA)
-	{
-	  zlog_warn ("Link State Update: Unknown LS type %d", lsah->type);
-	  continue;
-	}
+      {
+        zlog_warn ("Link State Update: Unknown LS type %d", lsah->type);
+        continue;
+      }
 
       /*
        * What if the received LSA's age is greater than MaxAge?
@@ -1716,6 +1726,9 @@ ospf_upd_list_clean (struct list *lsas)
   list_delete (lsas);
 }
 
+
+
+// ============================================
 /* OSPF Link State Update message read -- RFC2328 Section 13. */
 static void
 ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
@@ -1787,22 +1800,9 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
       struct ospf_lsa *ls_ret, *current;
 
       int ret = 1;
-      
-      if(lsa->data->type==OSPF_AS_EXTERNAL_LSA && htons(lsa->data->ls_age)==OSPF_LSA_MAXAGE)
-      {
 
-        zlog_debug("receive a ase = maxage,router_id=%x,id=%x",lsa->data->adv_router.s_addr,lsa->data->id.s_addr);
-        remove_se_ase(lsa->data->adv_router,0,0);
 
-      }
-      if(lsa->data->type==OSPF_AS_EXTERNAL_LSA && htons(lsa->data->ls_age) < OSPF_LSA_MAXAGE)
-      {
-        zlog_debug("receive a ase < maxage,router_id=%x,id=%x,age=%d",lsa->data->adv_router.s_addr,lsa->data->id.s_addr,htons(lsa->data->ls_age));
-        load_se_ase(lsa->data->adv_router,0,0);
       
-      }
-      
-
       if (IS_DEBUG_OSPF_NSSA)
       {
         char buf1[INET_ADDRSTRLEN];
@@ -1835,7 +1835,22 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
  
       /* Later, an NSSA Re-fresh can Re-fresh Type-7's and an ABR will
 	 translate them to a separate Type-5 packet.  */
-
+      // ==================  wyc add ===================
+      if(!check_lsa_info(lsa))
+      {
+        DISCARD_LSA(lsa, 99);
+      }
+      // 由于se_ase不参加传输，因而在收到ase相关packet时也要对于se_ase进行修改
+      if(lsa->data->type == OSPF_AS_EXTERNAL_LSA && !is_asel_dr(lsa))
+      {
+        if(MY_DEBUG)
+          zlog_debug("in func ospf ospf_ls_upd, receive ase, ase->age = %d", LS_AGE(lsa));
+        if(IS_LSA_MAXAGE(lsa))
+          remove_se_ase(lsa->data->adv_router, 0, 0);
+        else
+          load_se_ase(lsa->data->adv_router, 0, 0);
+      }
+      // ===============================================
       if (lsa->data->type == OSPF_AS_EXTERNAL_LSA)
         /* Reject from STUB or NSSA */
         if (nbr->oi->area->external_routing != OSPF_AREA_DEFAULT) 
@@ -1853,22 +1868,23 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
           DISCARD_LSA (lsa,2);
         }
 
+
       /* Find the LSA in the current database. */
 
       current = ospf_lsa_lookup_by_header (oi->area, lsa->data);
+
 
       /* If the LSA's LS age is equal to MaxAge, and there is currently
 	 no instance of the LSA in the router's link state database,
 	 and none of router's neighbors are in states Exchange or Loading,
 	 then take the following actions. */
-
-      if (IS_LSA_MAXAGE (lsa) && !current &&
+      // wyc modify fot asel-dr   maxage asel-dr will also include in lsdb
+      if (IS_LSA_MAXAGE (lsa) && !current && !is_asel_dr_outside_oa(lsa) &&
 	  (ospf_nbr_count (oi, NSM_Exchange) +
 	   ospf_nbr_count (oi, NSM_Loading)) == 0)
       {
         /* Response Link State Acknowledgment. */
         ospf_ls_ack_send (nbr, lsa);
-
         /* Discard LSA. */	  
         zlog_info ("Link State Update[%s]: LS age is equal to MaxAge.",
             dump_lsa_key(lsa));
@@ -1926,7 +1942,7 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
 #endif /* HAVE_OPAQUE_LSA */
 
       /* It might be happen that received LSA is self-originated network LSA, but
-       * router ID is cahnged. So, we should check if LSA is a network-LSA whose
+       * router ID is changed. So, we should check if LSA is a network-LSA whose
        * Link State ID is one of the router's own IP interface addresses but whose
        * Advertising Router is not equal to the router's own Router ID
        * According to RFC 2328 12.4.2 and 13.4 this LSA should be flushed.
@@ -1971,8 +1987,18 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
 	    (ret = ospf_lsa_more_recent (current, lsa)) < 0)
       {
         /* Actual flooding procedure. */
-        if (ospf_flood (oi->ospf, nbr, current, lsa) < 0)  /* Trap NSSA later. */
-          DISCARD_LSA (lsa, 4);
+        if (ospf_flood (oi->ospf, nbr, current, lsa) < 0) { /* Trap NSSA later. */
+          DISCARD_LSA (lsa, 4);  // 假如lsa洪泛失败，那么可以被舍弃
+        }
+        else {
+          // ====================  wyc add for asel-dr ==================
+          // 外部和内部的asel-dr收到后，都需要重新处理station状态, 能够成功洪泛且加入数据库的，才能进行recheck
+          if(is_asel_dr(lsa))
+          {
+            recheck_station(current, lsa);
+          }
+          // ============================================================
+        }
         continue;
       }
 
@@ -1990,7 +2016,7 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
               dump_lsa_key(lsa));
 
         /* Clean list of LSAs. */
-              ospf_upd_list_clean (lsas);
+        ospf_upd_list_clean (lsas);
         /* this lsa is not on lsas list already. */
         ospf_lsa_discard (lsa);
         return;
@@ -2018,10 +2044,9 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
             /* Delayed acknowledgment sent if advertisement received
         from Designated Router, otherwise do nothing. */
             if (oi->state == ISM_Backup)
-        if (NBR_IS_DR (nbr))
-          listnode_add (oi->ls_ack, ospf_lsa_lock (lsa));
-
-                  DISCARD_LSA (lsa, 5);
+              if (NBR_IS_DR (nbr))
+                listnode_add (oi->ls_ack, ospf_lsa_lock (lsa));
+                    DISCARD_LSA (lsa, 5);
           }
         else
           /* Acknowledge the receipt of the LSA by sending a
@@ -2066,7 +2091,8 @@ ospf_ls_upd (struct ip *iph, struct ospf_header *ospfh,
         /* Trap NSSA type later.*/
             {
               ospf_ls_upd_send_lsa (nbr, current, OSPF_SEND_PACKET_DIRECT);
-              zlog_debug("send upd in ospf_packet.c in ospf_upd read");
+              if(MY_DEBUG)
+                zlog_debug("send upd in ospf_packet.c in ospf_upd read");
             }
         
             DISCARD_LSA (lsa, 8);
@@ -2756,7 +2782,8 @@ ospf_verify_header (struct stream *ibuf, struct ospf_interface *oi,
 int
 ospf_read (struct thread *thread)
 {
-  zlog_debug("in func ospf_read begin");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_read begin");
   int ret;
   struct stream *ibuf;
   struct ospf *ospf;
@@ -2787,8 +2814,9 @@ ospf_read (struct thread *thread)
        and also platforms (such as Solaris 8) that claim to support ifindex
        retrieval but do not. */
     ifp = if_lookup_address (iph->ip_src);
-
-  zlog_debug("in func ospf_read, iph->src=%x",iph->ip_src.s_addr);
+  
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_read, iph->src=%x", iph->ip_src.s_addr);
 
   if (ifp == NULL)
     return 0;
@@ -3207,24 +3235,24 @@ ospf_make_db_desc (struct ospf_interface *oi, struct ospf_neighbor *nbr,
 
 	    if (!CHECK_FLAG (lsa->flags, OSPF_LSA_DISCARD))
 	      {
-		struct lsa_header *lsah;
-		u_int16_t ls_age;
-		
-		/* DD packet overflows interface MTU. */
-		if (length + OSPF_LSA_HEADER_SIZE > ospf_packet_max (oi))
-		  break;
-		
-		/* Keep pointer to LS age. */
-		lsah = (struct lsa_header *) (STREAM_DATA (s) +
-					      stream_get_endp (s));
-		
-		/* Proceed stream pointer. */
-		stream_put (s, lsa->data, OSPF_LSA_HEADER_SIZE);
-		length += OSPF_LSA_HEADER_SIZE;
-		
-		/* Set LS age. */
-		ls_age = LS_AGE (lsa);
-		lsah->ls_age = htons (ls_age);
+          struct lsa_header *lsah;
+          u_int16_t ls_age;
+          
+          /* DD packet overflows interface MTU. */
+          if (length + OSPF_LSA_HEADER_SIZE > ospf_packet_max (oi))
+            break;
+          
+          /* Keep pointer to LS age. */
+          lsah = (struct lsa_header *) (STREAM_DATA (s) +
+                      stream_get_endp (s));          
+
+          /* Proceed stream pointer. */
+          stream_put (s, lsa->data, OSPF_LSA_HEADER_SIZE);
+          length += OSPF_LSA_HEADER_SIZE;
+          
+          /* Set LS age. */
+          ls_age = LS_AGE (lsa);
+          lsah->ls_age = htons (ls_age);
 		
 	      }
 	    
@@ -3312,6 +3340,7 @@ ls_age_increment (struct ospf_lsa *lsa, int delay)
   return (age > OSPF_LSA_MAXAGE ? OSPF_LSA_MAXAGE : age);
 }
 
+// 在本轮已经发送出去的，会被从update列表中删除，但是不一定会把update列表清空，如果已经满了，就不能进行清空
 static int
 ospf_make_ls_upd (struct ospf_interface *oi, struct list *update, struct stream *s)
 {
@@ -3334,39 +3363,42 @@ ospf_make_ls_upd (struct ospf_interface *oi, struct list *update, struct stream 
   size_noauth = stream_get_size(s) - ospf_packet_authspace(oi);
 
   while ((node = listhead (update)) != NULL)
-    {
-      struct lsa_header *lsah;
-      u_int16_t ls_age;
+  {
+    struct lsa_header *lsah;
+    u_int16_t ls_age;
 
-      if (IS_DEBUG_OSPF_EVENT)
-        zlog_debug ("ospf_make_ls_upd: List Iteration");
+    if (IS_DEBUG_OSPF_EVENT)
+      zlog_debug ("ospf_make_ls_upd: List Iteration");
 
-      lsa = listgetdata (node);
+    lsa = listgetdata (node);
 
-      assert (lsa->data);
+    assert (lsa->data);
 
-      /* Will it fit? */
-      if (length + delta + ntohs (lsa->data->length) > size_noauth)
-        break;
+    /* Will it fit? */
+    if (length + delta + ntohs (lsa->data->length) > size_noauth)
+      break;
 
-      /* Keep pointer to LS age. */
-      lsah = (struct lsa_header *) (STREAM_DATA (s) + stream_get_endp (s));
+    /* Keep pointer to LS age. */
+    lsah = (struct lsa_header *) (STREAM_DATA (s) + stream_get_endp (s));
 
-      /* Put LSA to Link State Request. */
-      stream_put (s, lsa->data, ntohs (lsa->data->length));
+    if(MY_DEBUG1)
+      zlog_debug("in func ospf_make_ls_upd, lsa->adv = %x, lsa->id = %x, lsa->data->length = %d, lsa->phase_cnt = %d", lsa->data->adv_router.s_addr, lsa->data->id.s_addr, htons(lsa->data->length), lsa->phase_count);
 
-      /* Set LS age. */
-      /* each hop must increment an lsa_age by transmit_delay 
-         of OSPF interface */
-      ls_age = ls_age_increment (lsa, OSPF_IF_PARAM (oi, transmit_delay));
-      lsah->ls_age = htons (ls_age);
+    /* Put LSA to Link State Request. */
+    stream_put (s, lsa->data, ntohs (lsa->data->length));
 
-      length += ntohs (lsa->data->length);
-      count++;
+    /* Set LS age. */
+    /* each hop must increment an lsa_age by transmit_delay 
+        of OSPF interface */
+    ls_age = ls_age_increment (lsa, OSPF_IF_PARAM (oi, transmit_delay));
+    lsah->ls_age = htons (ls_age);
 
-      list_delete_node (update, node);
-      ospf_lsa_unlock (&lsa); /* oi->ls_upd_queue */
-    }
+    length += ntohs (lsa->data->length);
+    count++;
+
+    list_delete_node (update, node);
+    ospf_lsa_unlock (&lsa); /* oi->ls_upd_queue */
+  }
 
   /* Now set #LSAs. */
   stream_putl_at (s, pp, count);
@@ -3616,7 +3648,8 @@ ospf_db_desc_resend (struct ospf_neighbor *nbr)
 void
 ospf_ls_req_send (struct ospf_neighbor *nbr)
 {
-  zlog_debug("in func ospf_ls_req_send");
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ls_req_send");
   struct ospf_interface *oi;
   struct ospf_packet *op;
   u_int16_t length = OSPF_HEADER_SIZE;
@@ -3663,12 +3696,11 @@ ospf_ls_upd_send_lsa (struct ospf_neighbor *nbr, struct ospf_lsa *lsa,
 		      int flag)
 {
   struct list *update;
-
   update = list_new ();
-
   listnode_add (update, lsa);
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ls_udp_send_lsa, lsa->adv = %x, link state id = %x", lsa->data->adv_router.s_addr, lsa->data->id.s_addr);
   ospf_ls_upd_send (nbr, update, flag);
-
   list_delete (update);
 }
 
@@ -3682,6 +3714,8 @@ ospf_ls_upd_send_lsa (struct ospf_neighbor *nbr, struct ospf_lsa *lsa,
 static struct ospf_packet *
 ospf_ls_upd_packet_new (struct list *update, struct ospf_interface *oi)
 {
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ls_upd_packet_new");
   struct ospf_lsa *lsa;
   struct listnode *ln;
   size_t size;
@@ -3746,6 +3780,8 @@ static void
 ospf_ls_upd_queue_send (struct ospf_interface *oi, struct list *update,
 			struct in_addr addr)
 {
+  if(MY_DEBUG)
+    zlog_debug("in func ospf_ls_upd_queue_send");
   struct ospf_packet *op;
   u_int16_t length = OSPF_HEADER_SIZE;
 
@@ -3764,6 +3800,7 @@ ospf_ls_upd_queue_send (struct ospf_interface *oi, struct list *update,
 
   /* Fill OSPF header. */
   ospf_fill_header (oi, op->s, length);
+
 
   /* Set packet length. */
   op->length = length;
@@ -3801,7 +3838,7 @@ ospf_ls_upd_send_queue_event (struct thread *thread)
       
       if (rn->info == NULL)
         continue;
-      
+      // 同一个rn->info的目的地址相同
       update = (struct list *)rn->info;
 
       ospf_ls_upd_queue_send (oi, update, rn->p.u.prefix4);
@@ -3835,6 +3872,13 @@ ospf_ls_upd_send_queue_event (struct thread *thread)
 void
 ospf_ls_upd_send (struct ospf_neighbor *nbr, struct list *update, int flag)
 {
+  if(MY_DEBUG)
+    zlog_debug("in ospf_udp_send");
+  if(nbr != NULL)
+  {
+    if(MY_DEBUG)
+      zlog_debug("nbr->address = %x", nbr->address.u.prefix4.s_addr);
+  }
   struct ospf_interface *oi;
   struct ospf_lsa *lsa;
   struct prefix_ipv4 p;
@@ -3857,6 +3901,13 @@ ospf_ls_upd_send (struct ospf_neighbor *nbr, struct list *update, int flag)
      p.prefix.s_addr = htonl (OSPF_ALLSPFROUTERS);
   else if (oi->type == OSPF_IFTYPE_POINTOMULTIPOINT)
      p.prefix.s_addr = htonl (OSPF_ALLSPFROUTERS);
+  // =============  wyc add for asel-dr
+  else if(oi->type == OSPF_IFTYPE_INTEROA) {
+    // 之前vty.c中此内容已经转换为网络字节序
+    if(MY_DEBUG)
+      zlog_debug("in func in ospf_udp_send, send to ioa: %x", oi->if_oa_peer.s_addr);
+    p.prefix.s_addr = oi->if_oa_peer.s_addr;
+  }
   else
      p.prefix.s_addr = htonl (OSPF_ALLDROUTERS);
 
@@ -3874,7 +3925,11 @@ ospf_ls_upd_send (struct ospf_neighbor *nbr, struct list *update, int flag)
     rn->info = list_new ();
 
   for (ALL_LIST_ELEMENTS_RO (update, node, lsa))
+  {
+    if(MY_DEBUG)
+      zlog_debug("in func ospf_ls_upd_send, lsa->adv = %x, lsa->id = %x", lsa->data->adv_router.s_addr, lsa->data->id.s_addr);
     listnode_add (rn->info, ospf_lsa_lock (lsa)); /* oi->ls_upd_queue */
+  }
 
   if (oi->t_ls_upd_event == NULL)
     oi->t_ls_upd_event =
@@ -3978,3 +4033,202 @@ ospf_ls_ack_send_delayed (struct ospf_interface *oi)
   while (listcount (oi->ls_ack))
     ospf_ls_ack_send_list (oi, oi->ls_ack, dst);
 }
+
+// ================= wyc add ===================
+// return 1 if lsa info dismatch, then the lsa will be discard
+// 就算收到下一个时隙的LSA, 此时也快要时隙切换了，因此下一个时隙的LSA也直接收进来，进行路由计算, return 1
+int check_lsa_info(struct ospf_lsa *lsa)
+{
+  if(MY_DEBUG1)
+    zlog_debug("in func check_lsa_info");
+  if(lsa->data->type == OSPF_ROUTER_LSA)
+  {
+    struct router_lsa *rl = (struct router_lsa *) lsa->data;
+    if(MY_DEBUG1)
+      zlog_debug("int check_lsa_info, router, links = %d", ntohs(rl->links));
+    for(int i = ntohs(rl->links) - 1; i >= 0; i--)
+    {
+      if(rl->link[i].type == LSA_LINK_TYPE_INFO)
+      {
+        int tmp = rl->link[i].link_id.s_addr;
+        int lsa_phase = (tmp >> 16) & 0xff;
+        int lsa_x = (tmp >> 8) & 0xff;
+        int lsa_y = tmp & 0xff;
+        if(MY_DEBUG1)
+          zlog_debug("int check lsa_info, router, %x, %d, %d, %d", tmp, lsa_phase, lsa_x, lsa_y); 
+        if((lsa_phase != global_phase && lsa_phase != global_phase + 1) || lsa_x != station_info_curr.xadd || lsa_y != station_info_curr.yadd)
+        {
+          return 0;
+        }
+        break;
+      }
+    }
+  }
+  if(lsa->data->type == OSPF_AS_EXTERNAL_LSA)
+  {
+    struct as_external_lsa *ase = (struct as_external_lsa *) lsa->data;
+    int tmp = htonl(ase->e[0].route_tag);
+    int lsa_phase = (tmp >> 16) & 0xff;
+    int lsa_x = (tmp >> 8) & 0xff;
+    int lsa_y = tmp & 0xff;
+    if(MY_DEBUG1)
+      zlog_debug("int check lsa_info, ase, %x, %d, %d, %d", tmp, lsa_phase, lsa_x, lsa_y); 
+    if((lsa_phase != global_phase && lsa_phase != global_phase + 1) || lsa_x != station_info_curr.xadd || lsa_y != station_info_curr.yadd)
+    {
+      if(MY_DEBUG1)
+        zlog_debug("in check lsa_info, ase, return 0");
+      return 0;
+    }    
+  }
+  return 1;
+}
+
+// add_phase时，需要打tos标签结束, 修改phase或xadd或yadd后，才能调用此函数修改link_info标签 
+// 注意，只有没有phase的LSA才需要修改标签，有预置信息的LSA不需要进行任何操作
+void modify_all_lsa_tag()
+{
+  struct ospf *ospf = ospf_lookup();
+  struct route_node *rn;
+  struct ospf_lsa *lsa;
+  if(MY_DEBUG)
+    zlog_debug("in modify_all_lsa_tag 1 ##########################################");
+  // router_lsa backup无需打上标签，因而update时会生成新的lsa, backup中不并不会被传输
+  LSDB_LOOP(ROUTER_LSDB(ospf->backbone), rn, lsa)
+  {
+    struct router_lsa *rl = (struct router_lsa *) lsa->data;
+
+    if(lsa->phase_count == 0)
+    {
+      if(MY_DEBUG)
+        zlog_debug("rl->adv = %x, id = %x", rl->header.adv_router.s_addr, rl->header.id.s_addr);
+      if(MY_DEBUG)
+        zlog_debug("retag this lsa");
+      for(int i = rl->links - 1; i >= 0; i--)
+      {
+        if(rl->link[i].type == LSA_LINK_TYPE_INFO)
+        { 
+          rl->link[i].link_id.s_addr = ntohl((next_phase_tmp << 16) + (station_info_curr.xadd << 8) + (station_info_curr.yadd));
+          lsa->data->checksum = ospf_lsa_checksum (lsa->data);
+          break;
+        }
+      }
+    }
+  }
+  if(MY_DEBUG)
+    zlog_debug("in modify_all_lsa_tag 2 ##########################################");
+  // 对于backup_lsdb和ospf->lsdb，所有的as-external-lsa都需要打上tag, 且修改时都需要全部修改，否则ase提前老化时，无法将tag信息进行传输
+  LSDB_LOOP(EXTERNAL_LSDB(ospf), rn, lsa)
+  {
+    if(MY_DEBUG)
+      zlog_debug("before check, lsa_checksum = %x", lsa->data->checksum);
+    struct as_external_lsa *ase = (struct as_external_lsa *)lsa->data;
+    ase->e[0].route_tag = ntohl((next_phase_tmp << 16) + (station_info_curr.xadd << 8) + (station_info_curr.yadd));
+    lsa->data->checksum = ospf_lsa_checksum (lsa->data);
+    if(MY_DEBUG)
+      zlog_debug("ase->adv = %x, id = %x, tag = %d, ase->seq = %x, lsa_checksum = %x", ntohl(ase->header.adv_router.s_addr), ntohl(ase->header.id.s_addr), ntohl(ase->e[0].route_tag), ntohl(ase->header.ls_seqnum), lsa->data->checksum);
+  }
+  if(MY_DEBUG)
+    zlog_debug("in modify_all_lsa_tag 3 ##########################################");
+  LSDB_LOOP(backup_lsdb->type[OSPF_AS_EXTERNAL_LSA].db, rn, lsa)
+  {
+    if(MY_DEBUG)
+      zlog_debug("before check, lsa_checksum = %x", lsa->data->checksum);
+    struct as_external_lsa *ase = (struct as_external_lsa *)lsa->data;
+    ase->e[0].route_tag = ntohl((next_phase_tmp << 16) + (station_info_curr.xadd << 8) + (station_info_curr.yadd));
+    lsa->data->checksum = ospf_lsa_checksum (lsa->data);
+    if(MY_DEBUG)
+      zlog_debug("ase->adv = %x, id = %x, tag = %d, ase->seq = %x, lsa_checksum = %x", ntohl(ase->header.adv_router.s_addr), ntohl(ase->header.id.s_addr), ntohl(ase->e[0].route_tag), ntohl(ase->header.ls_seqnum), lsa->data->checksum);
+  }
+  if(MY_DEBUG)
+    zlog_debug("in modify_all_lsa_tag 4, finish ##########################################");
+}
+
+int is_asel_dr_outside_oa(struct ospf_lsa *lsa)
+{
+  if(station_info_curr.min_id_oa == -1) {
+    return 0;
+  }
+  if(lsa->data->type == OSPF_AS_EXTERNAL_LSA && lsa->data->id.s_addr == 0) {
+    // judge outside
+    int router_id = ntohl(lsa->data->adv_router.s_addr) & 0xffffff;
+    if(router_id < station_info_curr.min_id_oa || router_id > station_info_curr.max_id_oa) {
+      if(MY_DEBUG)
+        zlog_debug("in is_asel_dr_outside_oa, return 1");
+      return 1;
+    }
+    else
+      return 0;
+  }
+  return 0;
+}
+
+int is_asel_dr(struct ospf_lsa *lsa)
+{
+  if(lsa->data->type == OSPF_AS_EXTERNAL_LSA && lsa->data->id.s_addr == 0) 
+    return 1;
+  else
+    return 0;
+}
+// kind: 0 add_x; 1 add_y
+void del_asel_dr_outside()
+{
+  struct ospf *ospf = ospf_lookup();
+  struct route_node *rn;
+  struct ospf_lsa *lsa;
+  if(MY_DEBUG)
+    zlog_debug("in modify_asel_dr_outside ##########################################");
+
+  // 不能一边删除一边添加，否则会导致二叉树错误。应当一并删除后，一起添加
+  // renew: 直接删掉所有oa外asel-dr就行了
+  int new_idx = 0;
+  struct ospf_lsa* new_lsa_array[64];
+  LSDB_LOOP(EXTERNAL_LSDB(ospf), rn, lsa) {
+    if(is_asel_dr_outside_oa(lsa))
+    {
+      // int router_id = ntohl(lsa->data->adv_router.s_addr) & 0xffffff;
+      // int x = router_id / station_info_curr.n;
+      // int y = router_id % station_info_curr.n;
+      // if(kind == 0) {
+      //   // 节点的ip_x增加，那么地面站上方的router_id反而减少
+      //   x -= 1;
+      //   if(x < 0)
+      //     x += station_info_curr.P;
+      // } else {
+      //   int x_mod_k = x % station_info_curr.p_oa;
+      //   if(MY_DEBUG)
+      //     zlog_debug("x_mod_k = %d, yadd = %d", x_mod_k, station_info_curr.yadd);
+      //   if((x_mod_k - station_info_curr.yadd) % station_info_curr.k == 0)
+      //   {
+      //     // 节点的ip_y减少，那么地面站上方的router_id反而增加
+      //     y = (y + 1) % station_info_curr.n;
+      //   }
+      // }
+      // int new_router_id = (20 << 24) + x * station_info_curr.n + y;
+      // if(MY_DEBUG)
+      //   zlog_debug("in modify_asel_dr_outside after modify x = %d, y = %d, router_id = %d", x, y, new_router_id);
+      // struct ospf_lsa *lsa_new = ospf_lsa_dup(lsa);
+      // lsa_new->data->adv_router.s_addr = ntohl(new_router_id);
+      // lsa_new->data->checksum = ospf_lsa_checksum (lsa_new->data);
+      // lsa_new->lsdb = ospf->lsdb;
+      // if(MY_DEBUG)
+      //   zlog_debug("in modify_asel_dr_outside 1 ****");
+      ospf_ls_retransmit_delete_nbr_as (ospf, lsa);
+      lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
+      ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+      ospf_lsdb_delete (lsa->lsdb, lsa); 
+      // if(MY_DEBUG)
+      //   zlog_debug("in modify_asel_dr_outside 2 ****");
+      // new_lsa_array[new_idx] = lsa_new; 
+      // new_idx++;
+      // if(MY_DEBUG)
+      //   zlog_debug("in modify_asel_dr_outside, idx++ = %d ****", new_idx);
+    }
+  }
+  // for(int i = 0; i < new_idx; ++i)
+  // {
+  //   ospf_lsdb_add(ospf->lsdb, new_lsa_array[i]);
+  //   if(MY_DEBUG)
+  //     zlog_debug("in modify_asel_dr_outside, add %d success", i);
+  // }
+}
+//=====================================================

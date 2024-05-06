@@ -241,7 +241,7 @@ main (int argc, char **argv, char **env)
   /* Option handling. */
   while (1) 
     {
-      opt = getopt_long (argc, argv, "f:q:w:be:c:d:nEhCr", longopts, 0);
+      opt = getopt_long (argc, argv, "f:q:w:x:be:c:d:nEhCr", longopts, 0);
     
       if (opt == EOF)
 	break;
@@ -261,6 +261,9 @@ main (int argc, char **argv, char **env)
     break;
   case 'w':
     vtysh_client[0].path=optarg;
+    break;
+  case 'x':
+    vtysh_client[4].path=optarg;
     break;
 	case 'b':
 	  boot_flag = 1;

@@ -174,4 +174,10 @@ extern int ospf_hello_reply_timer (struct thread *);
 extern const struct message ospf_packet_type_str[];
 extern const size_t ospf_packet_type_str_max;
 
+// ================= wyc add ===================
+int check_lsa_info(struct ospf_lsa *);
+void modify_all_lsa_tag(void);
+int is_asel_dr_outside_oa(struct ospf_lsa *);
+int is_asel_dr(struct ospf_lsa *);
+void del_asel_dr_outside();
 #endif /* _ZEBRA_OSPF_PACKET_H */

@@ -494,7 +494,7 @@ stream_put (struct stream *s, const void *src, size_t size)
   s->endp += size;
 }
 
-/* Put character to the stream. */
+/* Put character to the stream.  */
 int
 stream_putc (struct stream *s, u_char c)
 {
@@ -510,7 +510,7 @@ stream_putc (struct stream *s, u_char c)
   return sizeof (u_char);
 }
 
-/* Put word to the stream. */
+/* Put word to the stream. stream_put，会按照大端序写入，所以LSA_body中存储的内容都是大端序 */
 int
 stream_putw (struct stream *s, u_int16_t w)
 {
@@ -528,7 +528,7 @@ stream_putw (struct stream *s, u_int16_t w)
   return 2;
 }
 
-/* Put long word to the stream. */
+/* Put long word to the stream. stream_put，会按照大端序写入，所以LSA_body中存储的内容都是大端序*/
 int
 stream_putl (struct stream *s, u_int32_t l)
 {

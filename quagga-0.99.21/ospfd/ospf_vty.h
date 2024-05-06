@@ -55,9 +55,10 @@ typedef struct data_info_str{
     int *line_total;
     char ***matrix;
 }DATA_INFO_STR;
-extern struct ospf_lsdb *vty_test_db;
+extern struct ospf_lsdb *backup_lsdb;
 extern int global_phase;
 extern int phase_all;
+extern int next_phase_tmp;
 extern DATA_INFO_STR neighborinfo;
 //neighbor info is for add_phase, record which to execute prelinkdown/up,every node has one
 struct neighbor_info
@@ -73,7 +74,7 @@ struct neighbor_info_list
   struct list *n_list;
 };
 //ase_info is for test is_ase_recover when add_phase happen, generate when ase-lsa input, 
-//point to inter star ase-lsa in vty_test_db, and never change
+//point to inter star ase-lsa in backup_lsdb, and never change
 struct ase_info
 {
   struct in_addr adv_router;
@@ -88,7 +89,7 @@ struct ase_info_list
 
 extern struct neighbor_info_list *neighbor_info_list_cur;
 extern struct ase_info_list *ase_info_list_cur;
-extern struct ospf_lsdb *vty_test_db;
+extern struct ospf_lsdb *backup_lsdb;
 
 struct neighbor_info *neighbor_info_new(void);
 void neighbor_info_free(void *);
@@ -121,8 +122,8 @@ struct se_info_list
   int se_info_count;
   struct list *se_list;
 };
-extern struct se_info_list *se_info_list_new();
-extern void se_info_list_free(struct se_info_list *);
+struct se_info_list *se_info_list_new(void);
+void se_info_list_free(struct se_info_list *);
 extern struct se_info_list *se_info_list_cur;
 
 //se_ase_info is for add_x, record star-earth-interface related as-external-lsa(ase) info, for x change
@@ -130,8 +131,10 @@ struct se_ase_info
 {
   struct in_addr router_id;
   char enable;
-  #define se_ase_enable 0x00
-  #define se_ase_notenable 0x01
+  // 用途：在不可意外链路中断发生时，标记se_ase_info，使得此处不能被添加静态路由, 
+  // 注意此处标记对于区域外的星间路由，星地路由，ASEL-DR都是同时生效的
+  #define BOADER_ENABLE 0x00
+  #define BOADER_NOT_ENABLE 0x01
   int x_count;
   int *x_list;
   int phase_count;
@@ -143,15 +146,34 @@ struct se_ase_info_list
   int router_count;
   struct list *se_ase_list;
 };
-extern struct se_ase_info_list *se_ase_info_list_cur;
 
-struct se_ase_info_list *se_ase_info_list_new();
+struct station_info
+{
+  int n,P,k,p_oa;
+  int x0,y0,k0;
+  int xadd, yadd;
+  int station_number;
+  int min_id_oa;
+  int max_id_oa;
+  int station[100][3];
+  char station_enable[100];
+};
+
+extern struct se_ase_info_list *se_ase_info_list_cur;
+struct se_ase_info_list *se_ase_info_list_new(void);
 extern int predictable_ase_cnt;
 
 void  se_ase_info_list_free(struct se_ase_info_list *);
 void remove_se_ase(struct in_addr,int,int);
 void load_se_ase(struct in_addr,int,int);
 void static_inter_star_operation(int,int);
+
+void outside_oa_default_operation(int, int);
+
+extern char *peer_oa_str_static;
+extern struct station_info station_info_curr;
+extern int peer_enable;
+void recheck_station(struct ospf_lsa *, struct ospf_lsa *);
 /* Prototypes. */
 extern void ospf_vty_init (void);
 extern void ospf_vty_show_init (void);

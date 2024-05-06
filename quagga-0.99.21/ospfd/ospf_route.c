@@ -441,7 +441,7 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
 
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug ("ospf_intra_add_stub(): Start");
-  zlog_debug("in func ospf_intra_add_stub(),begin\n");
+  /// zlog_debug("in func ospf_intra_add_stub(),begin\n");
   lsa = (struct router_lsa *) v->lsa;
 
   p.family = AF_INET;
@@ -478,7 +478,7 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
       return;
     }
 
-  zlog_debug ("ospf_intra_add_stub(): processing route to %s/%d, cost=%d", inet_ntoa (p.prefix), p.prefixlen, cost);
+  /// zlog_debug ("ospf_intra_add_stub(): processing route to %s/%d, cost=%d", inet_ntoa (p.prefix), p.prefixlen, cost);
   rn = route_node_get (rt, (struct prefix *) &p);
   
   /* Lookup current routing table. */
@@ -493,7 +493,7 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
     if (IS_DEBUG_OSPF_EVENT)
 	    zlog_debug ("ospf_intra_add_stub(): another route to the same prefix found with cost %u", cur_or->cost);
 
-    zlog_debug("rn->info exist,cur_or->cost=%d",cur_or->cost);
+    /// zlog_debug("rn->info exist,cur_or->cost=%d",cur_or->cost);
       /* Compare this distance to the current best cost to the stub
 	 network.  This is done by looking up the stub network's
 	 current routing table entry.  If the calculated distance D is
@@ -503,7 +503,7 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
 	  {
 	    if (IS_DEBUG_OSPF_EVENT)
 	      zlog_debug ("ospf_intra_add_stub(): old route is better, exit");
-      zlog_debug ("ospf_intra_add_stub(): old route is better, exit\n");
+      /// zlog_debug ("ospf_intra_add_stub(): old route is better, exit\n");
 	    return;
   	}
 
@@ -530,7 +530,7 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
 
 	    if (IPV4_ADDR_CMP (&cur_or->u.std.origin->id, &lsa->header.id) < 0)
 	      cur_or->u.std.origin = (struct lsa_header *) lsa;
-      zlog_debug ("ospf_intra_add_stub(): routes are equal, merge,end\n");
+      /// zlog_debug ("ospf_intra_add_stub(): routes are equal, merge,end\n");
 	    return;
 	  }
 
@@ -553,14 +553,14 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
 	    ospf_route_copy_nexthops_from_vertex (cur_or, v);
 
 	    cur_or->u.std.origin = (struct lsa_header *) lsa;
-      zlog_debug ("ospf_intra_add_stub(): new route is better, set it,end\n");
+      /// zlog_debug ("ospf_intra_add_stub(): new route is better, set it,end\n");
 	    return;
 	  }
   }
 
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug ("ospf_intra_add_stub(): installing new route");
-  zlog_debug ("ospf_intra_add_stub(): installing new route");
+  /// zlog_debug ("ospf_intra_add_stub(): installing new route");
   or = ospf_route_new ();
 
   or->id = v->id;
@@ -571,21 +571,21 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
   or->type = OSPF_DESTINATION_NETWORK;
   or->u.std.origin = (struct lsa_header *) lsa;
 
-  zlog_debug("or->id=%x,ext_routing=%d,lsa-adv=%x,id=%x",or->id.s_addr,or->u.std.external_routing,or->u.std.origin->adv_router.s_addr,or->u.std.origin->id.s_addr);
+  /// zlog_debug("or->id=%x,ext_routing=%d,lsa-adv=%x,id=%x",or->id.s_addr,or->u.std.external_routing,or->u.std.origin->adv_router.s_addr,or->u.std.origin->id.s_addr);
 
   /* Nexthop is depend on connection type. */
   if (v != area->spf)
   {
       if (IS_DEBUG_OSPF_EVENT)
 	      zlog_debug ("ospf_intra_add_stub(): this network is on remote router");
-      zlog_debug ("ospf_intra_add_stub(): this network is on remote router");
+      /// zlog_debug ("ospf_intra_add_stub(): this network is on remote router");
       ospf_route_copy_nexthops_from_vertex (or, v);
   }
   else
   {
     if (IS_DEBUG_OSPF_EVENT)
 	    zlog_debug ("ospf_intra_add_stub(): this network is on this router");
-    zlog_debug ("ospf_intra_add_stub(): this network is on this router");
+    /// zlog_debug ("ospf_intra_add_stub(): this network is on this router");
     if ((oi = ospf_if_lookup_by_prefix (area->ospf, &p)))
 	  {
 	    if (IS_DEBUG_OSPF_EVENT)
@@ -594,14 +594,14 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
 	    path = ospf_path_new ();
 	    path->nexthop.s_addr = 0;
 	    path->ifindex = oi->ifp->ifindex;
-      zlog_debug("listnode_add(or->paths,path),v=area->spf,path->ifindex=%d,if_name=%s,or's rn->p=%x/%d",path->ifindex,IF_NAME (oi),rn->p.u.prefix4.s_addr,rn->p.prefixlen);
+      /// zlog_debug("listnode_add(or->paths,path),v=area->spf,path->ifindex=%d,if_name=%s,or's rn->p=%x/%d",path->ifindex,IF_NAME (oi),rn->p.u.prefix4.s_addr,rn->p.prefixlen);
 	    listnode_add (or->paths, path);
 	  }
     else
 	  {
 	    if (IS_DEBUG_OSPF_EVENT)
 	      zlog_debug ("ospf_intra_add_stub(): where's the interface ?");
-      zlog_debug ("ospf_intra_add_stub(): where's the interface ?");
+      /// zlog_debug ("ospf_intra_add_stub(): where's the interface ?");
 	  }
   }
 
@@ -609,7 +609,7 @@ ospf_intra_add_stub (struct route_table *rt, struct router_lsa_link *link,
 
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug("ospf_intra_add_stub(): Stop");
-  zlog_debug("in func ospf_intra_add_stub(),end and ospf_route_new\n");
+  /// zlog_debug("in func ospf_intra_add_stub(),end and ospf_route_new\n");
 }
 
 const char *ospf_path_type_str[] =
@@ -757,7 +757,7 @@ ospf_route_copy_nexthops_from_vertex (struct ospf_route *to,
   struct vertex_parent *vp;
 
   assert (to->paths);
-  zlog_debug("in func ospf_route_copy_nexthops_from_vertex, begin,to->id=%x,to->mask=%x,",to->id.s_addr,to->mask.s_addr);
+  /// zlog_debug("in func ospf_route_copy_nexthops_from_vertex, begin,to->id=%x,to->mask=%x,",to->id.s_addr,to->mask.s_addr);
   for (ALL_LIST_ELEMENTS_RO (v->parents, node, vp))
   {
     nexthop = vp->nexthop;
@@ -769,12 +769,12 @@ ospf_route_copy_nexthops_from_vertex (struct ospf_route *to,
 	      path = ospf_path_new ();
 	      path->nexthop = nexthop->router;
 	      path->ifindex = nexthop->oi->ifp->ifindex;
-        zlog_debug("in func ospf_route_copy_nexthops_from_vertex,path->nexthop=%x,ifindex=%d,name=%s,listnode_add(to->paths,path)",path->nexthop.s_addr,path->ifindex,IF_NAME (nexthop->oi));
+        /// zlog_debug("in func ospf_route_copy_nexthops_from_vertex,path->nexthop=%x,ifindex=%d,name=%s,listnode_add(to->paths,path)",path->nexthop.s_addr,path->ifindex,IF_NAME (nexthop->oi));
 	      listnode_add (to->paths, path);
 	    }
 	  }
   }
-  zlog_debug("in func ospf_route_copy_nexthops_from_vertex, end");
+  /// zlog_debug("in func ospf_route_copy_nexthops_from_vertex, end");
 }
 
 struct ospf_path *

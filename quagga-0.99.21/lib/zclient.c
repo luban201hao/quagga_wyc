@@ -32,6 +32,7 @@
 #include "zclient.h"
 #include "memory.h"
 #include "table.h"
+
 
 /* Zebra client events. */
 enum event {ZCLIENT_SCHEDULE, ZCLIENT_READ, ZCLIENT_CONNECT};
@@ -583,7 +584,8 @@ zapi_ipv6_route (u_char cmd, struct zclient *zclient, struct prefix_ipv6 *p,
 int
 zebra_redistribute_send (int command, struct zclient *zclient, int type)
 {
-  zlog_debug("in func zebra_redistribute_send,command=%d,type=%d",command,type);
+  if(MY_DEBUG)
+    zlog_debug("in func zebra_redistribute_send,command=%d,type=%d",command,type);
   struct stream *s;
 
   s = zclient->obuf;
@@ -764,13 +766,15 @@ zebra_interface_address_read (int type, struct stream *s)
   int family;
   int plen;
   u_char ifc_flags;
-  zlog_debug("in func zebra_interface_address_read");
+  if(MY_DEBUG)
+    zlog_debug("in func zebra_interface_address_read");
   memset (&p, 0, sizeof(p));
   memset (&d, 0, sizeof(d));
 
   /* Get interface index. */
   ifindex = stream_getl (s);
-  zlog_debug("in func zebra_interface_address_read 1,ifindex=%d",ifindex);
+  if(MY_DEBUG)
+    zlog_debug("in func zebra_interface_address_read 1,ifindex=%d",ifindex);
   /* Lookup index. */
   ifp = if_lookup_by_index (ifindex);
   if (ifp == NULL)
@@ -795,10 +799,12 @@ zebra_interface_address_read (int type, struct stream *s)
   /* Fetch destination address. */
   stream_get (&d.u.prefix, s, plen);
   d.family = family;
-  zlog_debug("in func zebra_interface_address_read 2");
+  if(MY_DEBUG)
+    zlog_debug("in func zebra_interface_address_read 2");
   if (type == ZEBRA_INTERFACE_ADDRESS_ADD) 
     {
-      zlog_debug("in func zebra_interface_address_read 3,p=%x/%d, d=%x/%d",p.u.prefix4.s_addr,p.prefixlen,d.u.prefix4.s_addr,d.prefixlen);
+      if(MY_DEBUG)
+        zlog_debug("in func zebra_interface_address_read 3,p=%x/%d, d=%x/%d",p.u.prefix4.s_addr,p.prefixlen,d.u.prefix4.s_addr,d.prefixlen);
        /* N.B. NULL destination pointers are encoded as all zeroes */
        ifc = connected_add_by_prefix(ifp, &p,(memconstant(&d.u.prefix,0,plen) ?
 					      NULL : &d));
@@ -811,11 +817,13 @@ zebra_interface_address_read (int type, struct stream *s)
     }
   else
     {
-      zlog_debug("in func zebra_interface_address_read 4,p=%x/%d",p.u.prefix4.s_addr,p.prefixlen);
+      if(MY_DEBUG)
+        zlog_debug("in func zebra_interface_address_read 4,p=%x/%d",p.u.prefix4.s_addr,p.prefixlen);
       assert (type == ZEBRA_INTERFACE_ADDRESS_DELETE);
       ifc = connected_delete_by_prefix(ifp, &p);
     }
-  zlog_debug("in func zebra_interface_address_read 5");
+  if(MY_DEBUG)
+    zlog_debug("in func zebra_interface_address_read 5");
   return ifc;
 }
 
@@ -978,7 +986,8 @@ zclient_read (struct thread *thread)
 void
 zclient_redistribute (int command, struct zclient *zclient, int type)
 {
-  zlog_debug("in zclient_redistribute,cmd=%d,type=%d",command,type);
+  if(MY_DEBUG)
+    zlog_debug("in zclient_redistribute,cmd=%d,type=%d",command,type);
   if (command == ZEBRA_REDISTRIBUTE_ADD) 
     {
       if (zclient->redist[type])

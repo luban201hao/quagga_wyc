@@ -158,8 +158,8 @@ vertex_parent_new (struct vertex *v, int backlink, struct vertex_nexthop *hop)
   new->backlink = backlink;
   new->nexthop = hop;
 
-  zlog_debug("in vertex_parent_new: v->id=%s,backlink=%d",inet_ntoa(v->id),backlink);
-  zlog_debug("in vertex_parent_new: hop->router=%s",inet_ntoa(hop->router));
+  /// zlog_debug("in vertex_parent_new: v->id=%s,backlink=%d",inet_ntoa(v->id),backlink);
+  /// zlog_debug("in vertex_parent_new: hop->router=%s",inet_ntoa(hop->router));
   return new;
 }
 
@@ -340,9 +340,8 @@ ospf_lsa_has_link (struct lsa_header *w, struct lsa_header *v)
           //skip leaving links
           if(rl->link[i].tos==0x01)
           {
-            zlog_debug("skip in ospf_lsa_has_link");
-            continue;
-            
+            /// zlog_debug("skip in ospf_lsa_has_link");
+            continue;            
           }
           switch (rl->link[i].type)
             {
@@ -365,6 +364,7 @@ ospf_lsa_has_link (struct lsa_header *w, struct lsa_header *v)
               break;
             case LSA_LINK_TYPE_STUB:
             case LSA_LINK_TYPE_SE:
+            case LSA_LINK_TYPE_INFO:
               /* Stub can't lead anywhere, carry on */
               continue;
             default:
@@ -396,8 +396,11 @@ ospf_get_next_link (struct vertex *v, struct vertex *w,
   else
     {
       p = (u_char *) prev_link;
+      //  =====================   wyc modify ============================
       p += (OSPF_ROUTER_LSA_LINK_SIZE +
             (prev_link->m[0].tos_count * OSPF_ROUTER_LSA_TOS_SIZE));
+
+      // ==============================================================
     }
 
   lim = ((u_char *) v->lsa) + ntohs (v->lsa->length);
@@ -412,7 +415,7 @@ ospf_get_next_link (struct vertex *v, struct vertex *w,
       // skip leaving links
       if(l->m[0].tos_count==0x01)
       {
-        zlog_debug("skip in ospf_get_next_link");
+        /// zlog_debug("skip in ospf_get_next_link");
         continue;
         
       }
@@ -488,8 +491,8 @@ ospf_spf_add_parent (struct vertex *v, struct vertex *w,
   /* new parent is <= existing parents, add it to parent list */  
   vp = vertex_parent_new (v, ospf_lsa_has_link (w->lsa, v->lsa), newhop);
   listnode_add (w->parents, vp);
-  zlog_debug("in ospf_spf_add_parent v->id=%s",inet_ntoa(v->id));
-  zlog_debug("in ospf_spf_add_parent w->id=%s",inet_ntoa(w->id));
+  ///zlog_debug("in ospf_spf_add_parent v->id=%s",inet_ntoa(v->id));
+  ///zlog_debug("in ospf_spf_add_parent w->id=%s",inet_ntoa(w->id));
   return;
 }
 
@@ -735,7 +738,7 @@ ospf_nexthop_calculation (struct ospf_area *area, struct vertex *v,
       added = 1;
       ospf_spf_add_parent (v, w, vp->nexthop, distance);
     }
-  zlog_debug("after nexthop_cal:vertex_count:%d,parent_count:%d,nexthop_count:%d,enqueue_count:%d",vertex_count,parent_count,nexthop_count,enqueue_count);
+  ///zlog_debug("after nexthop_cal:vertex_count:%d,parent_count:%d,nexthop_count:%d,enqueue_count:%d",vertex_count,parent_count,nexthop_count,enqueue_count);
   return added;
 }
 
@@ -771,7 +774,7 @@ ospf_spf_next (struct vertex *v, struct ospf_area *area,
   
   p = ((u_char *) v->lsa) + OSPF_LSA_HEADER_SIZE + 4;
   lim = ((u_char *) v->lsa) + ntohs (v->lsa->length);
-  zlog_debug("in spf_next,lim_length=%d",ntohs (v->lsa->length));
+  ///zlog_debug("in spf_next,lim_length=%d",ntohs (v->lsa->length));
   while (p < lim)
   {
       struct vertex *w;
@@ -788,11 +791,16 @@ ospf_spf_next (struct vertex *v, struct ospf_area *area,
                 (l->m[0].tos_count * OSPF_ROUTER_LSA_TOS_SIZE));
           */
           p += OSPF_ROUTER_LSA_LINK_SIZE;
+          if(l->m[0].tos_count==0x01 || type == LSA_LINK_TYPE_INFO)
+          {
+            ///zlog_debug("skip in ospf_spf_next");
+            continue;
+          }
           /* (a) If this is a link to a stub network, examine the next
              link in V's LSA.  Links to stub networks will be
              considered in the second stage of the shortest path
              calculation. */
-          if ((type = l->m[0].type) == LSA_LINK_TYPE_STUB || (type = l->m[0].type)==LSA_LINK_TYPE_SE )
+          if ((type = l->m[0].type) == LSA_LINK_TYPE_STUB || (type = l->m[0].type) == LSA_LINK_TYPE_SE )
             continue;
           
           /* Infinite distance links shouldn't be followed, except
@@ -801,14 +809,9 @@ ospf_spf_next (struct vertex *v, struct ospf_area *area,
            */
           if ((v != area->spf) && l->m[0].metric >= OSPF_OUTPUT_COST_INFINITE)
             continue;
-          zlog_debug("in spf next type=%d",type);
-          zlog_debug("in spf next tos=%d",l->m[0].tos_count);
+          ///zlog_debug("in spf next type=%d",type);
+          ///zlog_debug("in spf next tos=%d",l->m[0].tos_count);
           //skip leaving links
-          if(l->m[0].tos_count==0x01)
-          {
-            zlog_debug("skip in ospf_spf_next");
-            continue;
-          }
           /* (b) Otherwise, W is a transit vertex (router or transit
              network).  Look up the vertex W's LSA (router-LSA or
              network-LSA) in Area A's link state database. */
@@ -916,7 +919,7 @@ ospf_spf_next (struct vertex *v, struct ospf_area *area,
           if (ospf_nexthop_calculation (area, v, w, l, distance))
           {
             pqueue_enqueue (w, candidate);
-            zlog_debug("in spf_next pqueue_enqueue:%s",inet_ntoa(w->id));
+            ///zlog_debug("in spf_next pqueue_enqueue:%s",inet_ntoa(w->id));
             enqueue_count++;
           }
           else if (IS_DEBUG_OSPF_EVENT)
@@ -1009,8 +1012,8 @@ ospf_spf_process_stubs (struct ospf_area *area, struct vertex *v,
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug ("ospf_process_stub():processing stubs for area %s",
                inet_ntoa (area->area_id));
-  zlog_debug ("in func ospf_spf_process_stubs,begin,vertex->id=%x,parent_is_root=%d",v->id.s_addr,parent_is_root);
-  zlog_debug ("ospf_process_stub():processing stubs for area %s",inet_ntoa (area->area_id));  
+  ///zlog_debug ("in func ospf_spf_process_stubs,begin,vertex->id=%x,parent_is_root=%d",v->id.s_addr,parent_is_root);
+  ///zlog_debug ("ospf_process_stub():processing stubs for area %s",inet_ntoa (area->area_id));  
   if (v->type == OSPF_VERTEX_ROUTER)
     {
       u_char *p;
@@ -1037,16 +1040,17 @@ ospf_spf_process_stubs (struct ospf_area *area, struct vertex *v,
           /*p += (OSPF_ROUTER_LSA_LINK_SIZE +
                 (l->m[0].tos_count * OSPF_ROUTER_LSA_TOS_SIZE));*/
           p += OSPF_ROUTER_LSA_LINK_SIZE;
+          if(MY_DEBUG)
+            zlog_debug("l->m[0]->type = %d, id = %x, data = %x", l->m[0].type, l->link_id.s_addr, l->link_data.s_addr);
           //skip leaving links
-          if(l->m[0].tos_count==0x01)
+          if(l->m[0].tos_count == 0x01 || l->m[0].type == LSA_LINK_TYPE_INFO)
           {
-            zlog_debug("skip in ospf_spf_process_stub");
+            if(MY_DEBUG)
+              zlog_debug("skip in ospf_spf_process_stub");
             continue;
-            
           }
-          if (l->m[0].type == LSA_LINK_TYPE_STUB || l->m[0].type ==LSA_LINK_TYPE_SE )
+          if (l->m[0].type == LSA_LINK_TYPE_STUB || l->m[0].type == LSA_LINK_TYPE_SE )
           {
-            zlog_debug("l->m[0]->type=%d,id=%x,data=%x\n",l->m[0].type,l->link_id.s_addr,l->link_data.s_addr);
             ospf_intra_add_stub (rt, l, v, area, parent_is_root);
           }
         }
@@ -1072,7 +1076,7 @@ ospf_spf_process_stubs (struct ospf_area *area, struct vertex *v,
 
       SET_FLAG (child->flags, OSPF_VERTEX_PROCESSED);
     }
-    zlog_debug("end in ospf_spf_process_stubs,vertex->id=%x,parent_is_root=%d\n",v->id.s_addr,parent_is_root);
+    ///zlog_debug("end in ospf_spf_process_stubs,vertex->id=%x,parent_is_root=%d\n",v->id.s_addr,parent_is_root);
 }
 
 void
@@ -1235,7 +1239,7 @@ ospf_spf_calculate (struct ospf_area *area, struct route_table *new_table,
       v = (struct vertex *) pqueue_dequeue (candidate);
       /* Update stat field in vertex. */
       *(v->stat) = LSA_SPF_IN_SPFTREE;
-      zlog_debug("v dequeue:v->id=%s",inet_ntoa(v->id));
+      ///zlog_debug("v dequeue:v->id=%s",inet_ntoa(v->id));
       ospf_vertex_add_parent (v);
 
       /* RFC2328 16.1. (4). */
@@ -1281,7 +1285,7 @@ ospf_spf_calculate (struct ospf_area *area, struct route_table *new_table,
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug ("ospf_spf_calculate: Stop. %ld vertices",
                 mtype_stats_alloc(MTYPE_OSPF_VERTEX));
-  zlog_debug("vertex_count:%d,parent_count:%d,nexthop_count:%d,enqueue_count:%d",vertex_count,parent_count,nexthop_count,enqueue_count);
+  ///zlog_debug("vertex_count:%d,parent_count:%d,nexthop_count:%d,enqueue_count:%d",vertex_count,parent_count,nexthop_count,enqueue_count);
 }
 
 /* Timer for SPF calculation. */
@@ -1331,7 +1335,7 @@ ospf_spf_calculate_timer (struct thread *thread)
   ospf_prune_unreachable_routers (new_rtrs);
 
   quagga_gettime (QUAGGA_CLK_MONOTONIC,&help_time);
-  zlog_debug ("spftest: router calculation complete %ld.%06ld",help_time.tv_sec,help_time.tv_usec);
+  ///zlog_debug ("spftest: router calculation complete %ld.%06ld",help_time.tv_sec,help_time.tv_usec);
 
   /* AS-external-LSA calculation should not be performed here. */
 

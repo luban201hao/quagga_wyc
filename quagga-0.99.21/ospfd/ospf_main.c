@@ -190,16 +190,19 @@ main (int argc, char **argv)
   struct thread thread;
   int dryrun = 0;
 
-  //new conf
+  // ========================= wyc new conf ============================
   char *vtypath=NULL;
-  //char *nbr_path=NULL;
-  //char *lsa_path=NULL;
 
-  global_phase=0;
-  phase_all=0;
-  se_prefix=prefix_new();
-  se_prefix->u.prefix4.s_addr=htonl(0xa000000);
-  se_prefix->prefixlen=8;
+  global_phase = 0;
+  station_info_curr.xadd = 0;
+  station_info_curr.yadd = 0;
+
+  phase_all = 0;
+  se_prefix = prefix_new();
+  se_prefix->u.prefix4.s_addr = htonl(0xa000000);
+  se_prefix->prefixlen = 8;
+
+  // ========================= end new conf ========================
 
   /* Set umask before anything for security */
   umask (0027);
@@ -302,8 +305,9 @@ main (int argc, char **argv)
   master = om->master;
 
   //initialize a new lsdb for vty
-  vty_test_db = ospf_lsdb_new ();
-
+  backup_lsdb = ospf_lsdb_new ();
+  station_info_curr.max_id_oa = -1;
+  station_info_curr.min_id_oa = -1;
 
   /* Library inits. */
   zprivs_init (&ospfd_privs);
@@ -365,19 +369,12 @@ main (int argc, char **argv)
     zlog_debug("serve vty:%s",vtypath);
   }
 
-
-  
-
   /* Print banner. */
   zlog_notice ("OSPFd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
-
-
 
   /* Fetch next active thread. */
   while (thread_fetch (master, &thread))
     thread_call (&thread);
-
-  neighbor_info_list_free(neighbor_info_list_cur);
 
   /* Not reached. */
   return (0);

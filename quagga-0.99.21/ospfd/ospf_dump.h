@@ -58,6 +58,7 @@
 #define OSPF_DEBUG_EVENT        0x01
 #define OSPF_DEBUG_NSSA		0x02
 
+
 /* Macro for setting debug option. */
 #define CONF_DEBUG_PACKET_ON(a, b)	    conf_debug_ospf_packet[a] |= (b)
 #define CONF_DEBUG_PACKET_OFF(a, b)	    conf_debug_ospf_packet[a] &= ~(b)

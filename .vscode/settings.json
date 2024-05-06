@@ -12,6 +12,10 @@
         "algorithm": "c",
         "compare": "c",
         "tuple": "c",
-        "utility": "c"
+        "utility": "c",
+        "ospf_opaque.h": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c"
     }
 }

@@ -50,7 +50,8 @@ in_cksum(void *parg, int nbytes)
 #define MODX                 4102   /* 5802 should be fine */
 
 /* To be consistent, offset is 0-based index, rather than the 1-based 
-   index required in the specification ISO 8473, Annex C.1 */
+   index required in the specification ISO 8473, Annex C.1 
+   此处保存了计算好的checksum, 所以调用以后原来的checksum就被修改了  */
 u_int16_t
 fletcher_checksum(u_char * buffer, const size_t len, const uint16_t offset)
 {
@@ -75,20 +76,20 @@ fletcher_checksum(u_char * buffer, const size_t len, const uint16_t offset)
   c1 = 0;
 
   while (left != 0)
+  {
+    partial_len = MIN(left, MODX);
+
+    for (i = 0; i < partial_len; i++)
     {
-      partial_len = MIN(left, MODX);
-
-      for (i = 0; i < partial_len; i++)
-	{
-	  c0 = c0 + *(p++);
-	  c1 += c0;
-	}
-
-      c0 = c0 % 255;
-      c1 = c1 % 255;
-
-      left -= partial_len;
+      c0 = c0 + *(p++);
+      c1 += c0;
     }
+
+    c0 = c0 % 255;
+    c1 = c1 % 255;
+
+    left -= partial_len;
+  }
   
   /* The cast is important, to ensure the mod is taken as a signed value. */
   x = (int)((len - offset - 1) * c0 - c1) % 255;
@@ -99,7 +100,7 @@ fletcher_checksum(u_char * buffer, const size_t len, const uint16_t offset)
   if (y > 255)  
     y -= 255;
   
-  /*
+  /* 
    * Now we write this to the packet.
    * We could skip this step too, since the checksum returned would
    * be stored into the checksum field by the caller.

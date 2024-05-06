@@ -168,24 +168,24 @@ listnode_delete (struct list *list, void *val)
 
   assert(list);
   for (node = list->head; node; node = node->next)
+  {
+    if (node->data == val)
     {
-      if (node->data == val)
-	{
-	  if (node->prev)
-	    node->prev->next = node->next;
-	  else
-	    list->head = node->next;
+      if (node->prev)
+        node->prev->next = node->next;
+      else
+        list->head = node->next;
 
-	  if (node->next)
-	    node->next->prev = node->prev;
-	  else
-	    list->tail = node->prev;
+      if (node->next)
+        node->next->prev = node->prev;
+      else
+        list->tail = node->prev;
 
-	  list->count--;
-	  listnode_free (node);
-	  return;
-	}
+      list->count--;
+      listnode_free (node);
+      return;
     }
+  }
 }
 
 /* Return first node's data if it is there.  */

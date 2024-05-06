@@ -162,7 +162,7 @@ ospf_lsdb.lo: ospf_lsdb.c /usr/include/stdc-predef.h ../lib/zebra.h \
  ../ospfd/ospfd.h ../lib/filter.h ../lib/if.h ../lib/linklist.h \
  ../ospfd/ospf_asbr.h ../ospfd/ospf_lsa.h ../lib/stream.h ../lib/prefix.h \
  ../ospfd/ospf_opaque.h ../lib/vty.h ../lib/thread.h ../lib/log.h \
- ../ospfd/ospf_lsdb.h
+ ../ospfd/ospf_lsdb.h ../ospfd/ospf_dump.h
 
 /usr/include/stdc-predef.h:
 
@@ -607,3 +607,5 @@ ospf_lsdb.lo: ospf_lsdb.c /usr/include/stdc-predef.h ../lib/zebra.h \
 ../lib/log.h:
 
 ../ospfd/ospf_lsdb.h:
+
+../ospfd/ospf_dump.h:

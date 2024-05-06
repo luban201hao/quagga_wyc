@@ -31,6 +31,7 @@
 #include "ospfd/ospf_asbr.h"
 #include "ospfd/ospf_lsa.h"
 #include "ospfd/ospf_lsdb.h"
+#include "ospfd/ospf_dump.h"
 
 struct ospf_lsdb *
 ospf_lsdb_new ()
@@ -85,26 +86,26 @@ static void
 ospf_lsdb_delete_entry (struct ospf_lsdb *lsdb, struct route_node *rn)
 {
   struct ospf_lsa *lsa = rn->info;
-  zlog_debug("in ospf_lsdb_delete_entry, 1,rn->%x",rn->p.u.prefix4.s_addr);
-  //zlog_debug("lsa->phase=%d",lsa->phase_count);
-  if(lsa->data)
-  {
-    //zlog_debug("lsa->data!=NULL");
-  }
-  zlog_debug("adv-router=%x",lsa->data->adv_router.s_addr);
+  if(MY_DEBUG)
+    zlog_debug("in ospf_lsdb_delete_entry, 1,rn->%x",rn->p.u.prefix4.s_addr);
+  // if(lsa->data)
+  // {
+  //   //zlog_debug("lsa->data!=NULL");
+  //   if(MY_DEBUG)
+  //     zlog_debug("adv-router=%x",lsa->data->adv_router.s_addr);
+  // }
   if (!lsa)
   {
     //zlog_debug("!lsa");
     return;
   }
-    
 
   if(lsa->phase_count==0)
   {
     assert (rn->table == lsdb->type[lsa->data->type].db);
   }
-  
-  //zlog_debug("in ospf_lsdb_delete_entry, 2");
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsdb_delete_entry, 2");
   if (IS_LSA_SELF (lsa))
     lsdb->type[lsa->data->type].count_self--;
   lsdb->type[lsa->data->type].count--;
@@ -112,12 +113,14 @@ ospf_lsdb_delete_entry (struct ospf_lsdb *lsdb, struct route_node *rn)
   lsdb->total--;
   rn->info = NULL;
   route_unlock_node (rn);
-  //zlog_debug("in ospf_lsdb_delete_entry, 3");
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsdb_delete_entry, 3");
 #ifdef MONITOR_LSDB_CHANGE
   if (lsdb->del_lsa_hook != NULL)
     (* lsdb->del_lsa_hook)(lsa);
 #endif /* MONITOR_LSDB_CHANGE */
-  //zlog_debug("in ospf_lsdb_delete_entry, 4,lsa->lock=%d",lsa->lock);
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsdb_delete_entry, 4,lsa->lock=%d", lsa->lock);
 
   //to ensure unlock phase lsa safe
   if(lsa->phase_count!=0)
@@ -125,7 +128,8 @@ ospf_lsdb_delete_entry (struct ospf_lsdb *lsdb, struct route_node *rn)
     lsa->lock=2;
   }
   ospf_lsa_unlock (&lsa); /* lsdb */
-  //zlog_debug("in ospf_lsdb_delete_entry, 5");
+  // if(MY_DEBUG)
+  //   zlog_debug("in ospf_lsdb_delete_entry, 5");
   return;
 }
 
@@ -140,17 +144,12 @@ ospf_lsdb_add (struct ospf_lsdb *lsdb, struct ospf_lsa *lsa)
   table = lsdb->type[lsa->data->type].db;
   //zlog_debug("9.2,lsa->data->type=%d",lsa->data->type);
   lsdb_prefix_set (&lp, lsa);  //set prefixlen=64 always
-
-  zlog_debug("in ospf_lsdb_add %x,%x,%x,%x",lp.family,lp.prefixlen,lp.id.s_addr,lp.adv_router.s_addr);
+  if(MY_DEBUG)
+    zlog_debug("in ospf_lsdb_add family = %x, prefexlen = %x,id = %x, adv = %x",lp.family,lp.prefixlen,lp.id.s_addr,lp.adv_router.s_addr);
   //zlog_debug("9.3");
   rn = route_node_get (table, (struct prefix *)&lp);
   //zlog_debug("10");
   /* nothing to do? */
-  if(rn->info)
-  {
-    //zlog_debug("rn->info exist");
-  }
-
   if (rn->info && rn->info == lsa)
     {
       //zlog_debug("rn->info exist and same");
@@ -186,30 +185,33 @@ ospf_lsdb_delete (struct ospf_lsdb *lsdb, struct ospf_lsa *lsa)
   struct route_node *rn;
 
   if (!lsdb)
-    {
+  {
       zlog_warn ("%s: Called with NULL LSDB", __func__);
       if (lsa)
         zlog_warn ("LSA[Type%d:%s]: LSA %p, lsa->lsdb %p",
                    lsa->data->type, inet_ntoa (lsa->data->id),
                    lsa, lsa->lsdb);
       return;
-    }
+  }
   
   if (!lsa)
     {
       zlog_warn ("%s: Called with NULL LSA", __func__);
       return;
     }
-  
+  // zlog_debug("test 4.1");
   assert (lsa->data->type < OSPF_MAX_LSA);
   table = lsdb->type[lsa->data->type].db;
   lsdb_prefix_set (&lp, lsa);
+  // zlog_debug("test 4.2");
   if ((rn = route_node_lookup (table, (struct prefix *) &lp)))
-    {
-      if (rn->info == lsa)
-        ospf_lsdb_delete_entry (lsdb, rn);
-      route_unlock_node (rn); /* route_node_lookup */
-    }
+  {
+    if (rn->info == lsa)
+      ospf_lsdb_delete_entry (lsdb, rn);
+    // zlog_debug("test 4");
+    route_unlock_node (rn); /* route_node_lookup */
+    // zlog_debug("test 5");
+  }
 }
 
 void

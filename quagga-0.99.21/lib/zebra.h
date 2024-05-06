@@ -22,6 +22,10 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #ifndef _ZEBRA_H
 #define _ZEBRA_H
 
+#define MY_DEBUG 1
+#define MY_DEBUG1 1
+#define HAS_STAION_DEFAULT_ROUTE
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif /* HAVE_CONFIG_H */

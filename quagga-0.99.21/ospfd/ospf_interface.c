@@ -429,7 +429,7 @@ ospf_if_lookup_by_prefix (struct ospf *ospf, struct prefix_ipv4 *p)
 	  prefix_copy (&ptmp, CONNECTED_PREFIX(oi->connected));
 	  apply_mask (&ptmp);
 
-    zlog_debug("in func ospf_if_lookup_by_prefix, oi->p=%x/%d",ptmp.u.prefix4.s_addr,ptmp.prefixlen);
+    /// zlog_debug("in func ospf_if_lookup_by_prefix, oi->p=%x/%d",ptmp.u.prefix4.s_addr,ptmp.prefixlen);
 	  if (prefix_same (&ptmp, (struct prefix *) p))
 	    return oi;
 	}
